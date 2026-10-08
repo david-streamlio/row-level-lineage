@@ -101,8 +101,9 @@ pane(s) each slide is about and keep the title bars in the crop:
 
 Speaker notes name the clips (I embed them): slide 7 ->
 stage1-slide07-streaming-55s.mp4; slide 9 -> stage2-20261008-105614.mp4;
-slide 10 -> stage3-20261008-105614.mp4; slide 19 -> stage4-20261008-114602.mp4
-(stage 4 was re-recorded alone).
+slide 10 -> stage3-20261008-105614.mp4; slide 11 -> stage5-slide11-churn-24s.mp4
+(in the "To" half of the FromTo layout; the "From" half stays static);
+slide 19 -> stage4-20261008-114602.mp4 (stage 4 was re-recorded alone).
 
 ## After updating
 

@@ -192,7 +192,7 @@ template's native slide type. Plate types (`Cover`, `Divider`, `Subdivider`,
 **Core Message:** The equality-delete upsert most CDC sinks use throws identity away; the table format isn't the problem.
 **Visual Manifest:**
   - Type: `Bar_Comparison`
-  - Spec: From: stage 2, position-delete `MERGE`, customer 9001, `_row_id` 0 / 0 / 0. To: stage 5, equality delete + insert, customer 9500, `_row_id` 0 / 1 / 2 at sequence numbers 2 / 4 / 6 *(rehearsal)*. Both tables are V3 created from scratch.
+  - Spec: From: stage 2, position-delete `MERGE`, customer 9001, `_row_id` 0 / 0 / 0. To: stage 5, equality delete + insert, customer 9500, `_row_id` 0 / 1 / 2 at sequence numbers 2 / 4 / 6 *(Polaris recording 2026-10-08)*. Both tables are V3 created from scratch. The "To" half hosts the clip `stage5-slide11-churn-24s.mp4` (24 s: the three rounds, `_row_id` 0 -> 1 -> 2, then the POINT line); the "From" half stays static (slide 9 already played stage 2). Poster image: `slide11-stage5-churn.png`.
 **On-Screen Text:** "Deletion vector: 0, 0, 0 -- Equality delete: 0, 1, 2"
 **Speaker Notes:** Same three updates, same V3 table setup. On the left, the deletion-vector `MERGE` from earlier: flat. On the right, delete-then-insert: a new `_row_id` every time, because an equality delete has no positional link to the row it replaces. This is the same observable effect as Flink's equality-delete upsert (`BaseEqualityDeltaWriter`) and most CDC sinks; say "same effect", not "identical", since the demo reproduces it with Spark. The writer you pick decides whether you get lineage. Bridge: "And the writer decides one more thing: your defaults."
 **Time:** Hard-Won Map, ~2 min
@@ -350,7 +350,8 @@ re-recorded alone with the trace back to the source; 1888x990 / 1888x976 /
 18 pt, pinned title bars), stage 1 streaming one event every 0.25 s, the
 Polaris console taking the right half at the end of stages 1 and 3, MinIO
 full frame at the end of stage 2, Marquez on the right through stage 4; plus
-`stage1-slide07-streaming-55s.mp4` (stage 1, 74-129 s). Stage 3 is
+`stage1-slide07-streaming-55s.mp4` (stage 1, 74-129 s) and
+`stage5-slide11-churn-24s.mp4` (stage 5, 9-33 s). Stage 3 is
 source-driven: the producer adds `channel` mid-stream and the sink evolves
 the table. Stills in `demo/recordings/polaris/stills/`:
 
