@@ -11,7 +11,8 @@ That bridge is what we call **Composable Lineage** here -- never "BYOL".
 ## Run it
 
 ```
-demo/run-stage.sh 4
+demo/run-stage.sh 4          # customer 9002 (new row)
+demo/run-stage.sh 4 9001     # stage 2's customer: the join lands on an updated row (recorded)
 ```
 
 ## What happens
@@ -23,7 +24,10 @@ demo/run-stage.sh 4
    `CommitReport` after every commit -- `tableName`, `snapshotId`,
    `sequenceNumber`, `operation` -- and POSTs a minimal OpenLineage-shaped
    `RunEvent` to `openlineage-collector`.
-2. This stage runs one `MERGE` against `silver.customers`.
+2. A new event streams in like every other bronze row: Kafka ->
+   Kafka Connect -> `bronze.events` (the stage waits for the commit). A
+   Spark `MERGE` reads it from `bronze.events` (declared as the input via
+   `OPENLINEAGE_INPUTS`) and folds it into `silver.customers`.
 3. `scripts/latest_lineage_event.py` reads the emitted event back out of
    `out/openlineage/events.jsonl` and prints it -- **the graph-level view**.
    It extracts `sequenceNumber` from that event.
@@ -31,6 +35,14 @@ demo/run-stage.sh 4
    `silver.customers WHERE _last_updated_sequence_number = <that number>`
    -- **the row-level view**, driven entirely by the graph event's own
    field.
+5. **Back to the source:** the silver row's `last_event_id` joins it to its
+   input event in `bronze.events`; that row's
+   `_last_updated_sequence_number` is the Kafka Connect commit that wrote
+   it, and `scripts/lineage_event_for_seq.py` finds that commit's lineage
+   event: job `kafka-connect/iceberg-sink`, input the Kafka topic. Row ->
+   input record -> ingest commit -> topic. *(Recording 2026-10-08: silver
+   `_row_id` 0 at seq 6 -> bronze `_row_id` 490 at seq 38 -> iceberg-sink,
+   `kafka://kafka:9092/events`.)*
 
 ## Why a custom MetricsReporter instead of `openlineage-spark`
 

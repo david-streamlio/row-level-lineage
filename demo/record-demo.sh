@@ -438,9 +438,13 @@ SELECT * EXCLUDE (event_id, amount, ts) RENAME (_last_updated_sequence_number AS
 FROM bronze.events ORDER BY _row_id DESC LIMIT 6;"
        START_PAGE="catalog_table bronze events"; END_PAGE="catalog_table bronze events"; END_SCROLL="${SCHEMA_SCROLL}" ;;
     4) STAGE_ARGS="4 9001"
-       set_query "-- silver.customers by last commit: the lineage event's sequenceNumber selects these rows
-SELECT _row_id, _last_updated_sequence_number AS seq, customer_id, total_amount
-FROM silver.customers ORDER BY seq DESC, customer_id;"
+       # both hops on one row: seq = the MERGE's sequenceNumber (feed: silver.customers),
+       # bronze_seq = the Kafka Connect commit that wrote its input event (feed: bronze.events)
+       set_query "-- silver row -> the bronze event that fed it: seq = the MERGE commit, bronze_seq = the Kafka Connect commit
+SELECT s._row_id, s._last_updated_sequence_number AS seq, s.customer_id,
+       b._row_id AS bronze_row_id, b._last_updated_sequence_number AS bronze_seq
+FROM silver.customers s JOIN bronze.events b ON b.event_id = s.last_event_id
+ORDER BY seq DESC, s.customer_id;"
        START_PAGE="marquez_dataset silver.customers"; END_PAGE="marquez_dataset bronze.events" ;;
     5) set_query "-- equality delete + insert, customer 9500: watch _row_id change every round
 SELECT _row_id, _last_updated_sequence_number AS seq, customer_id

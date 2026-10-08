@@ -32,9 +32,9 @@ Schema Evolution for Streaming Data"
 | Promise | Slides |
 |---|---|
 | V3 changes governance; discussions are batch-only, streaming breaks batch assumptions | 2, 3, 4 |
-| Lakehouse-native streaming + Iceberg V3 + REST catalogs (Apache Polaris) | 6, 7, 8 |
+| Lakehouse-native streaming + Iceberg V3 + REST catalogs (Apache Polaris) | 3 (defined), 6, 7, 8 |
 | Fine-grained governance for continuously ingested data | 20 (catalog as control point; Apache Polaris RBAC) |
-| Row-level lineage: which records and transformations produced the data, as it arrives | 6, 7, 9, 16, 18, 19 |
+| Row-level lineage: which records and transformations produced the data, as it arrives | 6, 7, 9, 16, 18, 19 (row -> input record -> ingest commit -> topic) |
 | Schema evolution for streaming sources, no stop/restart | 10, 12, 13 |
 | Bring Your Own Lineage alongside your catalog, without disrupting pipelines | 15, 16, 17, 18 |
 | Trustworthy, auditable data from the moment it's ingested | 19, 21 |
@@ -101,9 +101,9 @@ template's native slide type. Plate types (`Cover`, `Divider`, `Subdivider`,
 **Core Message:** Continuous commits, upserts and schema drift each break something batch lineage relied on.
 **Visual Manifest:**
   - Type: `Typography_Only` (three `AccentCard` + `HexIcon` cards, icons: pipeline, workflow, grid)
-  - Spec: card 1 "A commit every 2 seconds" (Kafka Connect's commit interval in this demo, `iceberg.control.commit.interval-ms: 2000`); card 2 "Upserts against rows that already exist"; card 3 "Producers add fields without telling anyone".
-**On-Screen Text:** the three card titles.
-**Speaker Notes:** In a stream nothing waits for a nightly run. Kafka Connect commits every two seconds in this demo, CDC sinks rewrite rows that already exist, and producers change their payloads without asking. A table-level graph has no row concept, so it can't follow any of that. Bridge: "We hit all three, plus some traps we didn't expect."
+  - Spec: card 1 "A commit every 2 seconds" (Kafka Connect's commit interval in this demo, `iceberg.control.commit.interval-ms: 2000`); card 2 "Upserts against rows that already exist"; card 3 "Producers add fields without telling anyone". Above the cards, one definition line: "Lakehouse-native streaming: the stream lands as Iceberg commits through the catalog, continuously -- no batch ETL hop in between."
+**On-Screen Text:** the definition line + the three card titles.
+**Speaker Notes:** First, what I mean by lakehouse-native streaming: the stream doesn't wait for a batch job to copy it into the lakehouse; it lands as Iceberg commits through the catalog, continuously. In this demo that's Kafka through the Kafka Connect Iceberg sink. In a stream nothing waits for a nightly run. Kafka Connect commits every two seconds in this demo, CDC sinks rewrite rows that already exist, and producers change their payloads without asking. A table-level graph has no row concept, so it can't follow any of that. Bridge: "We hit all three, plus some traps we didn't expect."
 **Time:** Rough Terrain, ~2 min
 
 ### Slide 4 -- "Three ways to get no row lineage at all"
@@ -135,7 +135,7 @@ template's native slide type. Plate types (`Cover`, `Divider`, `Subdivider`,
   - Type: `Mermaid_Architecture`
   - Spec: Kafka JSON event (no `_row_id`) -> Kafka Connect writes plain Parquet -> commit -> snapshot with `first-row-id` + `added-rows` -> table `next-row-id`. Second commit continues from the first. Numbers *(Polaris recording 2026-10-08, take 105614: 300 events streamed one every 0.25 s, 17 Kafka Connect commits)*: the last six commits, sequence numbers 12-17, have `first-row-id` 242 / 246 / 262 / 266 / 282 / 286 with `added-rows` 4 / 16 / 4 / 16 / 4 / 14, so `next-row-id` = 300.
 **On-Screen Text:** "`_row_id` = `first-row-id` + position"
-**Speaker Notes:** Kafka Connect writes ordinary Parquet with no lineage columns. When the snapshot commits, Iceberg assigns the row ids through manifest inheritance: each commit gets a `first-row-id`, the next commit starts where it ended. So the streaming writer needs zero changes. Bridge: "Here it is on the stream -- recorded from the demo."
+**Speaker Notes:** Kafka Connect writes ordinary Parquet with no lineage columns. When the snapshot commits, Iceberg assigns the row ids through manifest inheritance: each commit gets a `first-row-id`, the next commit starts where it ended. So the streaming writer needs zero changes. And because identity is assigned at commit, not by the writer, this holds for any lakehouse-native streaming writer that commits through the catalog -- the Kafka Connect sink is just the one we used. Bridge: "Here it is on the stream -- recorded from the demo."
 **Time:** Hidden Valley, ~2 min
 
 ### Slide 7 -- "The message has no id. The row does."
@@ -271,7 +271,7 @@ public class OpenLineageMetricsReporter implements MetricsReporter {
 "iceberg.catalog.metrics-reporter-impl":
     "com.demo.lineage.OpenLineageMetricsReporter"
 ```
-**Speaker Notes:** Iceberg calls `report()` after every commit; we keep only `CommitReport`. The same jar runs in Spark and in Kafka Connect. For Connect it's one connector property, no change to the sink itself. That's what "without disrupting streaming pipelines" means here. Bridge: "Now the graph has the ingest leg too."
+**Speaker Notes:** Iceberg calls `report()` after every commit; we keep only `CommitReport`. The same jar runs in Spark and in Kafka Connect. For Connect it's one connector property, no change to the sink itself. That's what "without disrupting streaming pipelines" means here. And it emits standard OpenLineage events, so any OpenLineage backend can take them -- we show Marquez, the reference implementation; that's the "bring your own" part. Bridge: "Now the graph has the ingest leg too."
 **Time:** Blazed Trail, ~1.5 min
 
 ### Slide 18 -- "The graph now starts at the topic"
@@ -284,14 +284,18 @@ public class OpenLineageMetricsReporter implements MetricsReporter {
 **Speaker Notes:** This is Marquez, the OpenLineage reference UI, fed by the reporter. The topic, the Kafka Connect job, the bronze table, the `MERGE` and the silver table are one connected graph, from the stream all the way to the curated table. Open a run and there's the `sequenceNumber`. Bridge: "So let's use it."
 **Time:** Blazed Trail, ~1.5 min
 
-### Slide 19 -- "From a lineage event to the exact rows"
+### Slide 19 -- "From a lineage event to the exact rows -- and back to the stream"
 **Suggested Layout:** `Screenshot`
-**Core Message:** The `sequenceNumber` in a lineage event selects exactly the rows that commit produced.
+**Core Message:** The `sequenceNumber` in a lineage event selects exactly the rows that commit produced -- and one hop back, the input record and the Kafka Connect commit that brought it in from the topic.
 **Visual Manifest:**
   - Type: `Typography_Only` (framed clip)
-  - Spec: demo stage 4. Lineage feed terminal line `sequenceNumber=4   silver.customers   overwrite   Spark` -> SQL window `SELECT * FROM silver.customers WHERE _last_updated_sequence_number = N;` -> rows. *(Polaris recording 2026-10-08, customer 9001: sequenceNumber 4 -> `_row_id` 0, customer 9001 -- the same row stage 2 updated.)*
-**On-Screen Text:** "`WHERE _last_updated_sequence_number = <sequenceNumber>`"
-**Speaker Notes:** Graph event on top, rows underneath, joined on one number. Nothing in the streaming pipeline changed to make this work. That's the "auditable from the moment it's ingested" claim: identity assigned at commit, joined to the lineage tool you already run. Bridge: "Which raises the governance question: who controls all this?"
+  - Spec: demo stage 4 (`stage4-20261008-114602.mp4`, still `slide18-19-stage4-end.png`). A new event for customer 9001 streams in through Kafka; Kafka Connect commits it to `bronze.events`; a Spark `MERGE` folds it into `silver.customers`. Lineage feed (top left), two lines: `sequenceNumber=38   bronze.events      append      Kafka Connect` and `sequenceNumber=6    silver.customers   overwrite   Spark`. SQL window (bottom left) joins the silver row to the bronze event it points at (`last_event_id`): `_row_id` 0, `seq` 6, customer 9001, `bronze_row_id` 490, `bronze_seq` 38. *(Polaris recording 2026-10-08. Writer output, not in the clip: the lineage event for `bronze.events` at sequenceNumber 38 is job `kafka-connect/iceberg-sink`, input `kafka://kafka:9092/events`.)* Callouts: `seq` 6 <-> the feed's `sequenceNumber=6` line; `bronze_seq` 38 <-> the feed's `sequenceNumber=38` line.
+**On-Screen Text:**
+```
+WHERE _last_updated_sequence_number = <sequenceNumber>     -- the rows a commit produced
+silver row -> last_event_id -> bronze row -> its commit -> Kafka topic
+```
+**Speaker Notes:** Graph event on top, rows underneath, joined on one number: the `MERGE` was sequenceNumber 6, and that selects silver row 0, the same row stage 2 updated. Now walk it back. The silver row says which event fed it; that event is bronze row 490, last written at sequence number 38 -- and the feed has a line for 38: Kafka Connect, reading the `events` topic. So from one row in a curated table we got to the exact input record, the commit that ingested it, and the topic it came from. Nothing in the streaming pipeline changed to make this work. That's the "auditable from the moment it's ingested" claim. Bridge: "Which raises the governance question: who controls all this?"
 **Time:** Blazed Trail, ~2 min
 
 ### Slide 20 -- "The catalog is the control point"
@@ -340,8 +344,9 @@ adjacent, and all three are `Typography_Only`.
 ## Recorded clips and stills (2026-10-08, take 105614)
 
 **Primary: Apache Polaris** (ASF catalog) -- `demo/recordings/polaris/`:
-`stage1..5-20261008-105614.mp4` (1888x990 / 1888x976; 141 s, 53 s, 70 s, 41 s,
-40 s), recorded with per-stage layouts (only the windows each slide needs,
+`stage1..3,5-20261008-105614.mp4` + `stage4-20261008-114602.mp4` (stage 4
+re-recorded alone with the trace back to the source; 1888x990 / 1888x976 /
+1888x1002; 141 s, 53 s, 70 s, 41 s, 40 s), recorded with per-stage layouts (only the windows each slide needs,
 18 pt, pinned title bars), stage 1 streaming one event every 0.25 s, the
 Polaris console taking the right half at the end of stages 1 and 3, MinIO
 full frame at the end of stage 2, Marquez on the right through stage 4; plus
@@ -357,7 +362,7 @@ the table. Stills in `demo/recordings/polaris/stills/`:
 | 10 | `slide10-stage3-mid-stream.png` -- Kafka JSON with `channel`, "sink evolved bronze.events by itself: 1 -> 2 schemas", SQL rows with `channel`; `slide10-stage3-end.png` -- proof (15 Kafka Connect appends, 0 deleted files, schemas 1 -> 2) + before/after table (402 NULL / mobile 31 / store 25 / web 30); `slide10-stage3-polaris-schema.png` -- Polaris console Schema: id 1, `channel` string |
 | 11 | `slide11-stage5-churn.png` -- writer + SQL, customer 9500, `_row_id` 2 after 3 rounds |
 | 12 | none (slides only) |
-| 18, 19 | `slide18-19-stage4-end.png` -- lineage feed + SQL (left), Marquez graph `events -> iceberg-sink -> bronze.events -> lake.silver.customers.commit -> silver.customers` (right) |
+| 18, 19 | `slide18-19-stage4-end.png` -- lineage feed (seq 38 Kafka Connect, seq 6 Spark) + SQL (silver `_row_id` 0 seq 6 -> bronze row 490 seq 38) (left), Marquez graph `events -> iceberg-sink -> bronze.events -> lake.silver.customers.commit -> silver.customers` (right) |
 | 20 | `slide20-polaris-access-control.png` -- Polaris console, Users & Access Control |
 
 **Backup: Lakekeeper** -- `demo/recordings/` (`stage1-20261007-172448.mp4`,

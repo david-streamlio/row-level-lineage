@@ -2,7 +2,9 @@
 
 Paste the block below into the Claude Design session that already has the
 deck (after `DESIGN-REVISION-POLARIS.md`). It supersedes any earlier version
-of this file. The demo was re-recorded with a new stage 3: the source adds a
+of this file. Stage 4 was re-recorded alone (take 114602) to trace a silver row
+back to its Kafka input, and slide 3 now defines lakehouse-native streaming.
+The demo was re-recorded with a new stage 3: the source adds a
 field mid-stream and the Kafka Connect sink evolves the table by itself (no
 more operator schema changes, defaults or VARIANT in the demo). The lineage
 graph now reaches silver.customers, and stage 2 ends in the MinIO console.
@@ -14,9 +16,9 @@ graph now reaches silver.customers, and stage 2 ends in the MinIO console.
 
 ```
 The demo was re-recorded and its schema-evolution story changed, so update
-the deck's screenshots, a few numbers, and slides 10, 12, 13 and 21.
+the deck's screenshots, a few numbers, and slides 3, 10, 12, 13, 19 and 21.
 SLIDE-PLAN.md in the linked folder is already updated and remains the
-locked spec -- reread slides 6-13, 18, 19 and 21 there. Change only what's
+locked spec -- reread slides 3, 6-13, 17, 18, 19 and 21 there. Change only what's
 listed; keep everything else, all the original rules (no placeholders or
 file names on screen, numbers exactly as written, code verbatim), 22 slides,
 plates at 1, 5 and 15.
@@ -51,8 +53,12 @@ pane(s) each slide is about and keep the title bars in the crop:
   graph (right). The graph is now one chain: events -> iceberg-sink ->
   bronze.events -> lake.silver.customers.commit -> silver.customers (plus
   lake.bronze.events.commit writing bronze.events). Redraw slide 18's
-  diagram/callouts to match. Feed line still reads
-  "sequenceNumber=4   silver.customers   overwrite   Spark".
+  diagram/callouts to match. The feed now has two lines --
+  "sequenceNumber=38   bronze.events   append   Kafka Connect" and
+  "sequenceNumber=6   silver.customers   overwrite   Spark" -- and the SQL
+  pane joins the silver row to its input event: _row_id 0, seq 6, customer
+  9001, bronze_row_id 490, bronze_seq 38. Slide 19 callouts: seq 6 <-> the
+  feed's sequenceNumber=6 line, bronze_seq 38 <-> the sequenceNumber=38 line.
 
 ## Story changes
 
@@ -68,6 +74,14 @@ pane(s) each slide is about and keep the title bars in the crop:
   optional" (detail in the plan).
 - Slide 21: step 6 reworded (evolve-schema-enabled, VARIANT for unmodeled
   fields, defaults only where every writer applies them).
+- Slide 3: add the one-line definition of lakehouse-native streaming above
+  the three cards (text in the plan); notes as in the plan.
+- Slides 6 and 17: speaker notes only (any writer that commits through the
+  catalog; any OpenLineage backend).
+- Slide 19: new title "From a lineage event to the exact rows -- and back to
+  the stream", new core message, two-line on-screen code block, notes as in
+  the plan: the row, its input record, the commit that ingested it, the
+  topic.
 
 ## Numbers
 
@@ -78,14 +92,17 @@ pane(s) each slide is about and keep the title bars in the crop:
 - Slide 10: 185 events streamed, all 185 landed, the last 86 with channel;
   15 snapshots, all Kafka Connect appends, 0 deleted files; schemas 1 -> 2;
   task still RUNNING; before/after: 402 NULL, mobile 31, store 25, web 30.
-- Slide 9 (sequence 1 / 2 / 3), 11 (0 / 1 / 2) and 19 (sequenceNumber 4 ->
-  _row_id 0) are unchanged.
+- Slide 19: sequenceNumber 6 -> silver _row_id 0 (customer 9001), its
+  input event = bronze _row_id 490 at sequenceNumber 38 (Kafka Connect,
+  topic events).
+- Slides 9 (sequence 1 / 2 / 3) and 11 (0 / 1 / 2) are unchanged.
 
 ## Video slots
 
 Speaker notes name the clips (I embed them): slide 7 ->
 stage1-slide07-streaming-55s.mp4; slide 9 -> stage2-20261008-105614.mp4;
-slide 10 -> stage3-20261008-105614.mp4; slide 19 -> stage4-20261008-105614.mp4.
+slide 10 -> stage3-20261008-105614.mp4; slide 19 -> stage4-20261008-114602.mp4
+(stage 4 was re-recorded alone).
 
 ## After updating
 
@@ -93,5 +110,5 @@ Report what changed per slide and how you cropped each still, and confirm
 with a text-only pass over the on-screen content and notes that none of
 these old values appear: "1727", "243 / 251", "19 commits", "250 events",
 "24 snapshots", "22 Kafka Connect", "1 -> 4", "341", "212", "id 3",
-"raw_payload", "ADD COLUMN channel", "093045".
+"raw_payload", "ADD COLUMN channel", "093045", "sequenceNumber=4".
 ```

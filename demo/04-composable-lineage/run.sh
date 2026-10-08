@@ -28,22 +28,34 @@ dc run --rm spark-demo -f /work/sql/create_silver_table.sql >/dev/null 2>&1 || t
 
 EVENT_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
 AMOUNT=$(python3 -c "import random; print(round(random.uniform(10, 500), 2))")
-TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000")
+TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
-# after stage 3 the sink has added "channel" to bronze.events, and Spark's
-# INSERT must list every column: fill it in when the table has it
-COLS="event_id, customer_id, amount, ts"; VALS="'${EVENT_ID}', ${CUSTOMER_ID}, ${AMOUNT}, TIMESTAMP '${TS}'"
+# the event takes the streaming path, like every other bronze row: Kafka ->
+# Kafka Connect -> bronze.events. After stage 3 the table has "channel"; send
+# it only then (otherwise the sink would evolve the table here)
+EVENT_JSON="{\"event_id\": \"${EVENT_ID}\", \"customer_id\": ${CUSTOMER_ID}, \"amount\": ${AMOUNT}, \"ts\": \"${TS}\"}"
 if catalog_curl "$(catalog_table_url bronze events)" 2>/dev/null \
     | python3 -c 'import json,sys; m=json.load(sys.stdin)["metadata"]; s=[x for x in m["schemas"] if x["schema-id"]==m["current-schema-id"]][0]; sys.exit(0 if any(f["name"]=="channel" for f in s["fields"]) else 1)'; then
-  COLS="${COLS}, channel"; VALS="${VALS}, 'web'"
+  EVENT_JSON="${EVENT_JSON%\}}, \"channel\": \"web\"}"
 fi
 
-banner "1. A new event in bronze.events, MERGEd into silver.customers for customer_id=${CUSTOMER_ID}"
+banner "1. A new event for customer_id=${CUSTOMER_ID} streams in: Kafka -> Kafka Connect -> bronze.events"
+echo "${EVENT_JSON}"
+echo "${EVENT_JSON}" | dc exec -T kafka /opt/kafka/bin/kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 --topic "${KAFKA_TOPIC}" >/dev/null 2>&1
+LANDED=""
+for _ in $(seq 1 30); do
+  if dc run --rm duckdb-demo python3 /work/scripts/lineage_sql.py \
+      "SELECT count(*) AS landed FROM bronze.events WHERE event_id = '${EVENT_ID}';" 2>/dev/null \
+      | grep -qE "│ +1 +│"; then LANDED=1; break; fi
+  sleep 2
+done
+if [[ -n "${LANDED}" ]]; then pass "Kafka Connect committed the event to bronze.events"; else fail "the event did not reach bronze.events within 60 s"; exit 1; fi
+
+banner "2. MERGE the event from bronze.events into silver.customers"
 # bronze -> silver, as in stage 2: the MERGE reads the event from bronze.events;
 # OPENLINEAGE_INPUTS declares that read for the lineage graph
 dc run --rm -e OPENLINEAGE_INPUTS="${OPENLINEAGE_DATASET_NAMESPACE}|bronze.events" spark-demo -e "
-INSERT INTO bronze.events (${COLS}) VALUES (${VALS});
-
 MERGE INTO silver.customers t
 USING (SELECT customer_id, amount, event_id, ts FROM bronze.events WHERE event_id = '${EVENT_ID}') s
 ON t.customer_id = s.customer_id
@@ -58,7 +70,7 @@ VALUES (s.customer_id, s.amount, s.event_id, s.ts);
 info "giving the async HTTP POST to openlineage-collector a moment to land ..."
 sleep 3
 
-banner "2. GRAPH-LEVEL: the OpenLineage-shaped event this commit emitted (no row-level concept at all)"
+banner "3. GRAPH-LEVEL: the OpenLineage-shaped event this commit emitted (no row-level concept at all)"
 LINEAGE_EVENT=$(python3 "${ROOT_DIR}/scripts/latest_lineage_event.py" "customers" | tee -a "${ROOT_DIR}/out/04-composable-lineage.log")
 echo "${LINEAGE_EVENT}"
 SEQUENCE_NUMBER=$(echo "${LINEAGE_EVENT}" | grep -oE 'SEQUENCE_NUMBER=[0-9]+' | cut -d= -f2)
@@ -69,8 +81,24 @@ if [[ -z "${SEQUENCE_NUMBER}" ]]; then
 fi
 pass "captured sequenceNumber=${SEQUENCE_NUMBER} from the lineage graph event"
 
-banner "3. ROW-LEVEL: drilling the graph event straight into rows via _last_updated_sequence_number = ${SEQUENCE_NUMBER}"
+banner "4. ROW-LEVEL: drilling the graph event straight into rows via _last_updated_sequence_number = ${SEQUENCE_NUMBER}"
 dc run --rm duckdb-demo python3 /work/scripts/read_row_lineage.py silver customers customer_id _last_updated_sequence_number "${SEQUENCE_NUMBER}" \
   2>&1 | tee -a "${ROOT_DIR}/out/04-composable-lineage.log"
 
-point "OpenLineage told us WHICH commit happened (graph). Iceberg's _last_updated_sequence_number told us WHICH ROWS that commit touched (identity). Neither tool knows the other's model -- sequenceNumber is the one key that bridges them. That join IS Composable Lineage."
+banner "5. BACK TO THE SOURCE: silver row -> the bronze event that fed it -> the Kafka Connect commit -> the Kafka topic"
+TRACE=$(dc run --rm duckdb-demo python3 /work/scripts/lineage_sql.py "
+SELECT s._row_id, s._last_updated_sequence_number AS silver_seq, s.customer_id,
+       b._row_id AS bronze_row_id, b._last_updated_sequence_number AS bronze_seq, b.event_id
+FROM silver.customers s JOIN bronze.events b ON b.event_id = s.last_event_id
+WHERE s.customer_id = ${CUSTOMER_ID};" 2>&1 | grep -v Container)
+echo "${TRACE}" | tee -a "${ROOT_DIR}/out/04-composable-lineage.log"
+BRONZE_SEQ=$(echo "${TRACE}" | grep "${EVENT_ID:0:8}" | awk -F'│' '{gsub(/ /,"",$6); print $6}')
+if [[ -z "${BRONZE_SEQ}" ]]; then
+  fail "silver.customers' row for ${CUSTOMER_ID} does not point at the new event"
+  exit 1
+fi
+python3 "${ROOT_DIR}/scripts/lineage_event_for_seq.py" "bronze.events" "${BRONZE_SEQ}" \
+  | grep -vE "^(JOB|INPUTS)=" | tee -a "${ROOT_DIR}/out/04-composable-lineage.log"
+pass "silver row -> event ${EVENT_ID:0:8}... -> bronze.events sequenceNumber ${BRONZE_SEQ} -> Kafka Connect, from the Kafka topic"
+
+point "OpenLineage told us WHICH commit happened (graph). Iceberg's _last_updated_sequence_number told us WHICH ROWS that commit touched (identity) -- and, one hop back, which Kafka Connect commit and which topic the input record came from. Neither tool knows the other's model -- sequenceNumber is the one key that bridges them. That join IS Composable Lineage."

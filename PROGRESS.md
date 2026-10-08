@@ -218,6 +218,22 @@ deleted files, schemas 1 -> 2, task RUNNING, 402 NULL / mobile 31 / store 25
 the full Marquez chain; stage 5 `_row_id` 0/1/2. `SLIDE-PLAN.md` and
 `DESIGN-REVISION-RECORDING.md` updated for this take.
 
+### Abstract gaps closed (2026-10-08)
+
+- "Lakehouse-native streaming" defined on slide 3 (the stream lands as
+  Iceberg commits through the catalog, continuously, no batch ETL hop);
+  slide 6 notes: works for any writer that commits through the catalog;
+  slide 17 notes: any OpenLineage backend.
+- "Which specific records produced it": stage 4's event now streams in
+  through Kafka -> Kafka Connect (no Spark INSERT), and a new step traces the
+  silver row back: `last_event_id` -> bronze row -> its
+  `_last_updated_sequence_number` = the Kafka Connect commit ->
+  `scripts/lineage_event_for_seq.py` -> job `kafka-connect/iceberg-sink`,
+  input `kafka://kafka:9092/events`. The recorder's stage 4 SQL pane shows the
+  join. Stage 4 re-recorded alone on the 105614 state:
+  `stage4-20261008-114602.mp4` (feed: seq 38 Kafka Connect, seq 6 Spark; SQL:
+  silver `_row_id` 0 seq 6 -> bronze row 490 seq 38). Slide 19 rewritten.
+
 ### Talk materials (2026-10-07)
 
 `SLIDE-PLAN.md` (22 slides, Datadog 2026 template, real recording values,
