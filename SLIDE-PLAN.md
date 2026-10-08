@@ -154,7 +154,7 @@ template's native slide type. Plate types (`Cover`, `Divider`, `Subdivider`,
 **Core Message:** Kafka Connect, Spark and DuckDB share one Iceberg REST catalog -- Apache Polaris -- and it keeps the row-id counter: the next commit's `first-row-id` starts where this one ended.
 **Visual Manifest:**
   - Type: `Typography_Only` (framed screenshot)
-  - Spec: two stills from the Polaris recording, side by side: the Apache Polaris console's `bronze.events` page from `slide08-stage1-polaris.png` (the console fills the right half at the end of stage 1: "Format Version 3", location `s3://warehouse/polaris/bronze/events`) and the writer pane from `slide07-stage1-message-vs-row.png` (bottom right: the check reading the catalog's metadata, last six commits `first_row_id` 242 / 246 / 262 / 266 / 282 / 286, `added_rows` 4 / 16 / 4 / 16 / 4 / 14, "PASS: first_row_id advances by added_rows each commit"). Callouts: "Format Version 3" and the `first_row_id` column.
+  - Spec: two stills from the Polaris recording, side by side: the Apache Polaris console's `bronze.events` page from `slide08-stage1-polaris.png` (the console fills the right half at the end of stage 1: "Format Version 3", location `s3://warehouse/polaris/bronze/events`) and the writer pane from `slide07-stage1-message-vs-row.png` (bottom right: the check reading the catalog's metadata, last six commits `first_row_id` 242 / 246 / 262 / 266 / 282 / 286, `added_rows` 4 / 16 / 4 / 16 / 4 / 14, "PASS: first_row_id advances by added_rows each commit"). Callouts: "Format Version 3" and the `first_row_id` column. Optional clip: `stage1-slide08-catalog-20s.mp4` (20.6 s, end of stage 1: the check prints at ~1 s, the Polaris console slides in at ~11.5 s and holds) -- play it, then land on the two-still layout with callouts.
 **On-Screen Text:** callouts "Format Version 3" and "first_row_id continues commit to commit".
 **Speaker Notes:** This is Apache Polaris, the ASF's Iceberg REST catalog. Kafka Connect writes through it, Spark writes through it, DuckDB reads through it. The check reads the catalog's own metadata: every commit's `first-row-id` starts exactly where the previous commit's rows ended -- 242 plus 4 rows is 246, plus 16 is 262, and so on, 17 commits for 300 streamed events. We didn't take V3 support on trust: the same operations through Polaris and through Iceberg's reference catalog produced identical metadata and identical row ids. (Backup: the Lakekeeper recording shows the same counter as "Next row ID 300" in its UI, still `slide08-stage1-next-row-id.png` in `demo/recordings/stills/`.) Bridge: "Appends are easy. What happens when a row changes?"
 **Time:** Hidden Valley, ~1.5 min
@@ -350,7 +350,8 @@ re-recorded alone with the trace back to the source; 1888x990 / 1888x976 /
 18 pt, pinned title bars), stage 1 streaming one event every 0.25 s, the
 Polaris console taking the right half at the end of stages 1 and 3, MinIO
 full frame at the end of stage 2, Marquez on the right through stage 4; plus
-`stage1-slide07-streaming-55s.mp4` (stage 1, 74-129 s) and
+`stage1-slide07-streaming-55s.mp4` (stage 1, 74-129 s),
+`stage1-slide08-catalog-20s.mp4` (stage 1, 120 s to the end) and
 `stage5-slide11-churn-24s.mp4` (stage 5, 9-33 s). Stage 3 is
 source-driven: the producer adds `channel` mid-stream and the sink evolves
 the table. Stills in `demo/recordings/polaris/stills/`:
