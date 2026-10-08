@@ -1,0 +1,959 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Row Lineage Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 22h24' stroke='%232a78d6' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='8' cy='22' r='4' fill='%232a78d6'/%3E%3Ccircle cx='24' cy='22' r='4' fill='%232a78d6'/%3E%3Ccircle cx='16' cy='10' r='4' fill='%23eb6834'/%3E%3C/svg%3E">
+<!--
+  Live view of the row-level-lineage demo, for projecting to an audience.
+  Self-contained on purpose: no web fonts, no CDN scripts, so it works on a
+  conference network with no internet. Data comes from server.py's /api/*.
+  Keys: p pipeline, b browse tables, 1-5 stages, t light/dark.
+-->
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #6f6d68;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --ring: rgba(11, 11, 11, 0.10);
+    --kept: #2a78d6;        /* series 1: identity kept */
+    --churn: #eb6834;       /* series 2: identity churned */
+    --kept-wash: rgba(42, 120, 214, 0.10);
+    --good: #0ca30c;
+    --good-ink: #006300;
+    --critical: #d03b3b;
+    --flash: rgba(42, 120, 214, 0.16);
+    --code-bg: #f0efec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --ring: rgba(255, 255, 255, 0.10);
+      --kept: #3987e5;
+      --churn: #d95926;
+      --kept-wash: rgba(57, 135, 229, 0.12);
+      --good-ink: #0ca30c;
+      --flash: rgba(57, 135, 229, 0.22);
+      --code-bg: #232322;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --ring: rgba(255, 255, 255, 0.10);
+    --kept: #3987e5;
+    --churn: #d95926;
+    --kept-wash: rgba(57, 135, 229, 0.12);
+    --good-ink: #0ca30c;
+    --flash: rgba(57, 135, 229, 0.22);
+    --code-bg: #232322;
+  }
+
+  * { box-sizing: border-box; }
+  html { font-size: clamp(15px, 0.95vw, 20px); }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.45; height: 100vh; overflow: hidden;
+  }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.92em; }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--kept); outline-offset: 2px; }
+
+  .app { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); height: 100vh; }
+
+  /* ---------- header ---------- */
+  header {
+    display: flex; align-items: center; gap: 2rem;
+    padding: 0.9rem 1.75rem; border-bottom: 1px solid var(--grid); background: var(--surface); min-width: 0;
+  }
+  header h1 { font-size: 1.35rem; font-weight: 650; margin: 0; white-space: nowrap; letter-spacing: -0.01em; }
+  nav.stages { display: flex; gap: 0.25rem; flex: 1; min-width: 0; overflow-x: auto; }
+  nav.stages button {
+    display: flex; align-items: baseline; gap: 0.5rem;
+    background: none; border: 0; border-bottom: 3px solid transparent;
+    padding: 0.45rem 0.85rem 0.35rem; cursor: pointer; color: var(--ink-2); font-size: 1rem; white-space: nowrap;
+  }
+  nav.stages button .n { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; }
+  nav.stages button:hover { color: var(--ink); }
+  nav.stages button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--kept); font-weight: 600; }
+  nav.stages button[aria-selected="true"] .n { color: var(--kept); }
+  .backend { display: flex; align-items: center; gap: 0.6rem; white-space: nowrap; color: var(--ink-2); font-size: 0.95rem; min-width: 0; }
+  #backend-label { overflow: hidden; text-overflow: ellipsis; }
+  .backend .dot { flex: none; }
+  .backend .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--muted); }
+  .backend.up .dot { background: var(--good); }
+  .backend.down .dot { background: var(--critical); }
+  .theme-toggle { flex: none; background: none; border: 1px solid var(--grid); border-radius: 6px; padding: 0.3rem 0.6rem; cursor: pointer; color: var(--ink-2); }
+
+  /* ---------- body: stage + commit feed ---------- */
+  .body { display: grid; grid-template-columns: minmax(0, 1fr) 23rem; min-height: 0; }
+  main { padding: 1.6rem 2rem 1.5rem; overflow: auto; min-width: 0; }
+  .point { font-size: 1.6rem; line-height: 1.3; font-weight: 600; margin: 0 0 1.5rem; max-width: 52ch; letter-spacing: -0.01em; }
+  .point code { font-weight: 600; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 2.5rem; }
+  .grid-3 { display: grid; grid-template-columns: 1.05fr 1fr 0.95fr; gap: 0 2rem; }
+  .region { min-width: 0; }
+  .region + .region { border-left: 1px solid var(--grid); padding-left: 2rem; }
+  .grid-2 > .region + .region, .grid-3 > .region + .region { border-left: 1px solid var(--grid); }
+  .region-stack > .region + .region { border-left: 0; padding-left: 0; border-top: 1px solid var(--grid); padding-top: 1.25rem; margin-top: 1.25rem; }
+  h2 { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.2rem; }
+  .sub { color: var(--ink-2); margin: 0 0 1rem; font-size: 0.95rem; }
+
+  /* status line: icon + label, never color alone */
+  .status { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 600; margin: 0.25rem 0 0.75rem; }
+  .status svg { flex: none; }
+  .status.good { color: var(--good-ink); }
+  .status.bad { color: var(--critical); }
+
+  /* tables */
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 0.85rem; padding: 0.3rem 0.75rem 0.4rem 0; border-bottom: 1px solid var(--axis); }
+  td { padding: 0.42rem 0.75rem 0.42rem 0; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  td.num, th.num { text-align: right; }
+  tr.dim td { color: var(--muted); }
+  tr.hl td { background: var(--kept-wash); }
+  .key { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 50%; vertical-align: -0.05rem; margin-right: 0.4rem; }
+
+  /* counters (stage 3) */
+  .counters { display: grid; grid-template-columns: repeat(4, 1fr); margin: 0 0 1.75rem; border-top: 1px solid var(--grid); border-bottom: 1px solid var(--grid); }
+  .counter { padding: 1rem 1.25rem 1.1rem 0; }
+  .counter + .counter { padding-left: 1.25rem; border-left: 1px solid var(--grid); }
+  .counter .label { color: var(--ink-2); font-size: 0.95rem; }
+  .counter .value { font-size: 3rem; font-weight: 600; line-height: 1.1; letter-spacing: -0.02em; }
+  .counter .delta { font-size: 0.95rem; color: var(--muted); }
+  .counter .delta.changed { color: var(--ink); font-weight: 600; }
+  .baseline-note { display: flex; align-items: center; gap: 1rem; color: var(--ink-2); font-size: 0.9rem; margin: -0.75rem 0 1.5rem; }
+  .link-btn { background: none; border: 1px solid var(--grid); border-radius: 6px; padding: 0.25rem 0.7rem; cursor: pointer; color: var(--ink-2); font-size: 0.9rem; }
+  .link-btn:hover { color: var(--ink); border-color: var(--axis); }
+  .tag { font-size: 0.8rem; color: var(--ink-2); border: 1px solid var(--grid); border-radius: 4px; padding: 0.05rem 0.4rem; white-space: nowrap; }
+
+  /* charts */
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .tooltip {
+    position: absolute; pointer-events: none; z-index: 5; min-width: 12rem;
+    background: var(--surface); border: 1px solid var(--ring); border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18); padding: 0.55rem 0.75rem; font-size: 0.9rem;
+    font-variant-numeric: tabular-nums; display: none;
+  }
+  .tooltip .t-head { font-weight: 600; margin-bottom: 0.2rem; }
+  .tooltip .t-row { display: flex; justify-content: space-between; gap: 1rem; color: var(--ink-2); }
+  .tooltip .t-row b { color: var(--ink); font-weight: 600; }
+
+  /* stage 4 */
+  pre.json, pre.sql {
+    margin: 0; padding: 0.9rem 1rem; background: var(--code-bg); border-radius: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.85rem;
+    line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--ink-2);
+  }
+  pre .hit { color: var(--ink); font-weight: 700; background: var(--kept-wash); outline: 2px solid var(--kept); border-radius: 3px; padding: 0 0.15rem; }
+  .bridge { display: flex; align-items: center; gap: 0.75rem; margin: 1rem 0; color: var(--ink-2); }
+  .bridge .big { font-size: 3rem; font-weight: 600; color: var(--ink); line-height: 1; letter-spacing: -0.02em; }
+  .follow { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; color: var(--ink-2); font-size: 0.9rem; }
+
+  /* view nav: pipeline + tables, then the numbered stages */
+  nav.stages .sep { width: 1px; background: var(--grid); margin: 0.35rem 0.6rem; flex: none; }
+
+  /* pipeline */
+  .flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr; align-items: stretch; margin: 0 0 1.75rem; }
+  .flow .arrow { display: flex; align-items: center; padding: 0 0.6rem; color: var(--muted); font-size: 1.6rem; }
+  .step { border: 1px solid var(--grid); border-radius: 8px; padding: 0.85rem 1rem 1rem; background: var(--surface); min-width: 0; }
+  .step.off { border-style: dashed; background: transparent; }
+  .step-title { color: var(--ink-2); font-size: 0.88rem; }
+  .step-name { font-weight: 600; font-size: 1.1rem; margin: 0.1rem 0 0.45rem; overflow-wrap: anywhere; }
+  .step-body { font-size: 0.92rem; color: var(--ink-2); }
+  .step-body .status { display: flex; margin: 0 0 0.3rem; font-size: 0.92rem; }
+  .step-body .big { font-size: 1.9rem; font-weight: 600; color: var(--ink); line-height: 1.15; display: block; }
+  td.raw { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.8rem; color: var(--ink-2); overflow-wrap: anywhere; max-width: 34rem; }
+  th.group { color: var(--ink); font-weight: 600; font-size: 0.9rem; border-bottom: 0; padding-bottom: 0; }
+  td.lin, th.lin { background: var(--kept-wash); }
+  td.pending { color: var(--muted); font-style: italic; }
+  .legend { color: var(--ink-2); font-size: 0.9rem; margin: 0 0 1rem; max-width: 80ch; }
+  .legend code { color: var(--ink); }
+
+  /* table browser */
+  .browser { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 0 2rem; }
+  .tbl-list { border-right: 1px solid var(--grid); padding-right: 1rem; }
+  .tbl-list h3 { font-size: 0.85rem; font-weight: 500; color: var(--muted); margin: 0.9rem 0 0.25rem; }
+  .tbl-list h3:first-child { margin-top: 0; }
+  .tbl-list button { display: block; width: 100%; text-align: left; background: none; border: 0; border-radius: 6px; padding: 0.35rem 0.6rem; cursor: pointer; color: var(--ink-2); overflow-wrap: anywhere; }
+  .tbl-list button:hover { background: var(--kept-wash); color: var(--ink); }
+  .tbl-list button[aria-current="true"] { background: var(--kept-wash); color: var(--ink); font-weight: 600; box-shadow: inset 3px 0 0 var(--kept); }
+  .facts { color: var(--ink-2); margin: 0.15rem 0 1rem; }
+  .subtabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--grid); margin: 0 0 1rem; }
+  .subtabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 0.4rem 0.8rem; cursor: pointer; color: var(--ink-2); }
+  .subtabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--kept); font-weight: 600; }
+  .pager { display: flex; align-items: center; gap: 0.75rem; margin: 0.75rem 0 0; color: var(--ink-2); font-size: 0.92rem; }
+  .chip { display: inline-flex; align-items: center; gap: 0.5rem; background: var(--kept-wash); border-radius: 999px; padding: 0.2rem 0.4rem 0.2rem 0.8rem; margin: 0 0 0.75rem; font-size: 0.92rem; }
+  .chip button { background: none; border: 0; cursor: pointer; color: var(--ink-2); font-size: 1rem; padding: 0 0.3rem; }
+  .data-table td { white-space: nowrap; max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
+  .data-table td.null { color: var(--muted); }
+  .scroll-x { overflow-x: auto; }
+  a.data-link { color: var(--kept); text-decoration: none; font-size: 0.95rem; }
+  a.data-link:hover { text-decoration: underline; }
+  .stage-links { margin: -0.75rem 0 1.25rem; display: flex; gap: 1.5rem; flex-wrap: wrap; }
+
+  /* empty / error states */
+  .empty { border: 1px dashed var(--axis); border-radius: 8px; padding: 1.25rem 1.4rem; color: var(--ink-2); max-width: 46rem; }
+  .empty strong { color: var(--ink); display: block; margin-bottom: 0.25rem; font-weight: 600; }
+
+  /* ---------- commit feed ---------- */
+  aside.feed { border-left: 1px solid var(--grid); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+  .feed-head { padding: 1.1rem 1.25rem 0.75rem; border-bottom: 1px solid var(--grid); }
+  .feed-head h2 { margin: 0; }
+  .feed-head p { margin: 0.15rem 0 0; color: var(--ink-2); font-size: 0.88rem; }
+  .feed ol { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
+  .feed li { border-bottom: 1px solid var(--grid); }
+  .feed li button {
+    display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 0.75rem; width: 100%;
+    text-align: left; background: none; border: 0; padding: 0.7rem 1.25rem; cursor: pointer;
+  }
+  .feed li button:hover { background: var(--kept-wash); }
+  .feed li.selected button { box-shadow: inset 3px 0 0 var(--kept); background: var(--kept-wash); }
+  .feed .tbl { font-weight: 600; }
+  .feed .seq { font-variant-numeric: tabular-nums; color: var(--ink); text-align: right; }
+  .feed .meta { color: var(--muted); font-size: 0.85rem; grid-column: 1 / -1; }
+  .feed .fresh button { animation: flash 2.4s ease-out; }
+  @keyframes flash { from { background: var(--flash); } to { background: transparent; } }
+  .feed .none { padding: 1.25rem; color: var(--ink-2); font-size: 0.92rem; }
+  @media (prefers-reduced-motion: reduce) { .feed .fresh button { animation: none; } }
+
+  @media (max-width: 1100px) {
+    body { overflow: auto; height: auto; }
+    .app { height: auto; }
+    header { flex-wrap: wrap; gap: 0.75rem 1.5rem; padding: 0.75rem 1rem; }
+    nav.stages { order: 3; flex-basis: 100%; overflow-x: auto; }
+    .body { grid-template-columns: 1fr; }
+    main { padding: 1.25rem 1rem; }
+    aside.feed { border-left: 0; border-top: 1px solid var(--grid); max-height: 28rem; }
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    .grid-2 > .region + .region, .grid-3 > .region + .region { border-left: 0; padding-left: 0; border-top: 1px solid var(--grid); padding-top: 1.25rem; margin-top: 1.25rem; }
+    .counters { grid-template-columns: repeat(2, 1fr); }
+    .counter:nth-child(3) { padding-left: 0; border-left: 0; }
+    .flow { grid-template-columns: 1fr; gap: 0.5rem; }
+    .flow .arrow { justify-content: center; padding: 0; transform: rotate(90deg); }
+    .browser { grid-template-columns: 1fr; }
+    .tbl-list { border-right: 0; border-bottom: 1px solid var(--grid); padding: 0 0 1rem; margin-bottom: 1rem; }
+    .point { font-size: 1.3rem; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Row lineage</h1>
+    <nav class="stages" role="tablist" aria-label="Demo stage"></nav>
+    <div class="backend" id="backend"><span class="dot"></span><span id="backend-label">Connecting</span></div>
+    <button class="theme-toggle" id="theme" title="Toggle light/dark (t)">Theme</button>
+  </header>
+  <div class="body">
+    <main id="stage" role="tabpanel" aria-live="polite"></main>
+    <aside class="feed" aria-label="Commit feed">
+      <div class="feed-head">
+        <h2>Lineage events</h2>
+        <p>One per Spark commit, newest first</p>
+      </div>
+      <ol id="feed"></ol>
+    </aside>
+  </div>
+</div>
+<div class="tooltip" id="tooltip" role="tooltip"></div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Config: which tables/keys each stage looks at. Defaults match the
+// demo/*/run.sh defaults; override per run with ?s2=...&s5=... in the URL.
+// ---------------------------------------------------------------------------
+const params = new URLSearchParams(location.search);
+const CONFIG = {
+  pollMs: 2000,
+  bronze: { ns: "bronze", table: "events" },
+  kept: { ns: "silver", table: "customers", key: params.get("s2") || "9001" },
+  churn: { ns: "failure_demo", table: "customers_equality_upsert", key: params.get("s5") || "9500" },
+};
+// The stage that creates each table, for "not created yet" hints.
+const CREATED_BY = { "bronze.events": 1, "silver.customers": 2, "failure_demo.customers_equality_upsert": 5 };
+
+const STAGES = [
+  { n: 1, name: "Ingest", render: renderIngest },
+  { n: 2, name: "Mutation", render: renderMutation },
+  { n: 3, name: "Schema evolution", render: renderSchema },
+  { n: 4, name: "Composable lineage", render: renderJoin },
+  { n: 5, name: "Failure mode", render: renderFailure },
+];
+
+const state = {
+  view: "pipeline",        // "pipeline" | "tables" | "stage"
+  stage: 1,
+  tbl: { ns: null, table: null, tab: "rows", offset: 0, seq: null },
+  events: [],
+  nextEvent: 0,
+  freshIndexes: new Set(),
+  selectedEvent: null,     // event index pinned in stage 4; null = follow newest
+  baseline: null,          // stage 3 counters snapshot
+  seenFirstPoll: false,
+};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+const $ = (sel) => document.querySelector(sel);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (n) => (n == null ? "–" : Number(n).toLocaleString("en-US"));
+
+async function api(path) {
+  try {
+    const res = await fetch(path, { cache: "no-store" });
+    const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    return res.ok ? { ok: true, data: body } : { ok: false, status: res.status, error: body.error || `HTTP ${res.status}` };
+  } catch (e) {
+    return { ok: false, status: 0, error: "the dashboard server isn't responding" };
+  }
+}
+
+function problem(res, ns, table) {
+  const name = `${ns}.${table}`;
+  if (res.status === 404) {
+    const stage = CREATED_BY[name];
+    return `<div class="empty"><strong><code>${esc(name)}</code> doesn't exist yet.</strong>` +
+      (stage ? `Run <code>demo/run-stage.sh ${stage}</code> to create it. This view updates on its own.` : "It appears once a stage creates it.") + `</div>`;
+  }
+  if (res.status === 0) return `<div class="empty"><strong>The dashboard server isn't responding.</strong>Start it with <code>docker compose up -d lineage-dashboard</code>.</div>`;
+  return `<div class="empty"><strong>Can't read <code>${esc(name)}</code> from the catalog.</strong>${esc(res.error)}<br>If the stack isn't running, <code>demo/run-stage.sh 1</code> starts it.</div>`;
+}
+
+const ICON_OK = `<svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9" fill="currentColor"/><path d="M5.8 10.4l2.7 2.7 5.7-6" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const ICON_BAD = `<svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9" fill="currentColor"/><path d="M6.6 6.6l6.8 6.8M13.4 6.6l-6.8 6.8" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>`;
+const status = (ok, text) => `<div class="status ${ok ? "good" : "bad"}">${ok ? ICON_OK : ICON_BAD}<span>${text}</span></div>`;
+
+// Event table names are catalog.namespace.table ("lake." locally, "glue." on AWS).
+function shortTable(t) {
+  const parts = (t || "?").split(".");
+  return parts.length >= 3 ? parts.slice(1).join(".") : parts.join(".");
+}
+function timeOf(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+// ---------------------------------------------------------------------------
+// Identity chart: one key's _row_id at every snapshot. A line joins
+// consecutive snapshots where the row exists; a snapshot where it doesn't
+// (between a delete and its re-insert) breaks the line and gets a muted tick.
+// ---------------------------------------------------------------------------
+function identityChart(identity, colorVar, chartId, sharedMax) {
+  const pts = identity.points;
+  if (!pts.length) return `<div class="empty"><strong>No commits yet.</strong></div>`;
+  const W = 760, H = 430, m = { l: 40, r: 118, t: 24, b: 78 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const ids = pts.flatMap((p) => p.rows.map((r) => r.rowId));
+  // Side-by-side charts pass sharedMax so both use the same y scale.
+  const yMax = Math.max(2, sharedMax || 0, ...ids);
+  const x = (i) => m.l + (pts.length === 1 ? iw / 2 : (i * iw) / (pts.length - 1));
+  const y = (v) => m.t + ih - (v / yMax) * ih;
+  const step = Math.max(1, Math.ceil(yMax / 4));
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="_row_id of ${esc(identity.keyColumn)} ${esc(identity.key)} at each snapshot">`;
+
+  for (let v = 0; v <= yMax; v += step) {
+    svg += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/>`;
+    svg += `<text x="${m.l - 14}" y="${y(v) + 6}" text-anchor="end" font-size="18" fill="var(--muted)" style="font-variant-numeric:tabular-nums">${v}</text>`;
+  }
+  svg += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(0)}" y2="${y(0)}" stroke="var(--axis)" stroke-width="1"/>`;
+
+  pts.forEach((p, i) => {
+    svg += `<text x="${x(i)}" y="${H - m.b + 32}" text-anchor="middle" font-size="18" fill="var(--ink-2)" style="font-variant-numeric:tabular-nums">seq ${p.sequenceNumber}</text>`;
+    svg += `<text x="${x(i)}" y="${H - m.b + 56}" text-anchor="middle" font-size="16" fill="var(--muted)">${esc(p.operation)}</text>`;
+  });
+
+  // line segments between consecutive present points (first row of each)
+  let path = "";
+  pts.forEach((p, i) => {
+    const prev = pts[i - 1];
+    if (p.rows.length && prev && prev.rows.length) {
+      path += `M${x(i - 1)},${y(prev.rows[0].rowId)} L${x(i)},${y(p.rows[0].rowId)} `;
+    }
+  });
+  if (path) svg += `<path d="${path}" stroke="var(${colorVar})" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+
+  pts.forEach((p, i) => {
+    if (!p.rows.length) {
+      svg += `<line x1="${x(i)}" x2="${x(i)}" y1="${y(0) - 10}" y2="${y(0) + 10}" stroke="var(--muted)" stroke-width="2" stroke-linecap="round"/>`;
+      svg += `<text x="${x(i)}" y="${y(0) - 20}" text-anchor="middle" font-size="16" fill="var(--muted)">absent</text>`;
+    }
+    p.rows.forEach((r) => {
+      svg += `<circle cx="${x(i)}" cy="${y(r.rowId)}" r="8" fill="var(${colorVar})" stroke="var(--page)" stroke-width="3"/>`;
+    });
+  });
+
+  // direct label on the last present point
+  for (let i = pts.length - 1; i >= 0; i--) {
+    if (pts[i].rows.length) {
+      const r = pts[i].rows[0];
+      svg += `<text x="${x(i) + 18}" y="${y(r.rowId) + 7}" font-size="20" font-weight="600" fill="var(--ink)">_row_id ${r.rowId}</text>`;
+      break;
+    }
+  }
+
+  // hover targets, bigger than the marks
+  pts.forEach((p, i) => {
+    svg += `<rect x="${x(i) - 26}" y="${m.t}" width="52" height="${ih + 12}" fill="transparent" data-chart="${chartId}" data-i="${i}" style="cursor:crosshair"/>`;
+  });
+  svg += `</svg>`;
+  return `<div class="chart" id="${chartId}">${svg}</div>`;
+}
+
+const chartData = {};
+function bindTooltips() {
+  const tip = $("#tooltip");
+  document.querySelectorAll("rect[data-chart]").forEach((el) => {
+    el.addEventListener("mouseenter", (ev) => {
+      const ident = chartData[el.dataset.chart];
+      const p = ident && ident.points[Number(el.dataset.i)];
+      if (!p) return;
+      const rows = p.rows.length
+        ? p.rows.map((r) => `<div class="t-row">_row_id <b>${r.rowId}</b></div><div class="t-row">_last_updated_sequence_number <b>${r.lastUpdatedSequenceNumber}</b></div>`).join("")
+        : `<div class="t-row">${esc(ident.keyColumn)} ${esc(ident.key)} not in this snapshot</div>`;
+      tip.innerHTML = `<div class="t-head">Snapshot seq ${p.sequenceNumber} (${esc(p.operation)})</div>${rows}`;
+      tip.style.display = "block";
+    });
+    el.addEventListener("mousemove", (ev) => {
+      tip.style.left = Math.min(ev.pageX + 16, window.innerWidth - tip.offsetWidth - 12) + "px";
+      tip.style.top = ev.pageY + 16 + "px";
+    });
+    el.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+  });
+}
+
+function identityTable(identity) {
+  const rows = identity.points.map((p) => {
+    if (!p.rows.length) return `<tr class="dim"><td class="num">${p.sequenceNumber}</td><td>${esc(p.operation)}</td><td class="num">absent</td><td class="num">–</td></tr>`;
+    return p.rows.map((r) => `<tr><td class="num">${p.sequenceNumber}</td><td>${esc(p.operation)}</td><td class="num">${r.rowId}</td><td class="num">${r.lastUpdatedSequenceNumber}</td></tr>`).join("");
+  }).join("");
+  return `<table><thead><tr><th class="num">Snapshot seq</th><th>Operation</th><th class="num"><code>_row_id</code></th><th class="num"><code>_last_updated_seq</code></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+const fetchIdentity = (cfg) => api(`/api/tables/${cfg.ns}/${cfg.table}/identity/${encodeURIComponent(cfg.key)}`);
+const maxRowId = (res) => (res.ok ? Math.max(0, ...res.data.points.flatMap((p) => p.rows.map((r) => r.rowId))) : 0);
+
+function identityPanel(res, cfg, colorVar, chartId, title, sharedMax) {
+  if (!res.ok) return `<h2>${title}</h2>${problem(res, cfg.ns, cfg.table)}`;
+  const d = res.data;
+  chartData[chartId] = d;
+  const present = d.points.filter((p) => p.rows.length).length;
+  let verdict;
+  if (!present) verdict = `<p class="sub">Customer ${esc(d.key)} isn't in any snapshot yet.</p>`;
+  else if (d.identityStable) verdict = status(true, `Same <code>_row_id</code> in all ${present} snapshot${present === 1 ? "" : "s"} where the row exists`);
+  else verdict = status(false, `${d.distinctRowIds.length} different <code>_row_id</code> values for one customer`);
+  return `<h2>${title}</h2><p class="sub"><code>${esc(d.table)}</code>, ${esc(d.keyColumn)} = ${esc(d.key)}. Each dot is the row's <code>_row_id</code> in that snapshot.</p>${verdict}${identityChart(d, colorVar, chartId, sharedMax)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Stage renderers. Each returns HTML for <main>.
+// ---------------------------------------------------------------------------
+const tableLink = (ns, table, label, extra = "") => `<a class="data-link" href="#tables/${ns}/${table}${extra}">${label}</a>`;
+const stageLinks = (...links) => `<div class="stage-links">${links.join("")}</div>`;
+
+async function renderIngest() {
+  const { ns, table } = CONFIG.bronze;
+  const res = await api(`/api/tables/${ns}/${table}/stats`);
+  const head = `<p class="point">Iceberg assigns <code>_row_id</code> when a snapshot commits. Kafka Connect only writes plain Parquet rows.</p>` +
+    stageLinks(`<a class="data-link" href="#pipeline">See raw Kafka messages next to their rows</a>`, tableLink(ns, table, `Browse all rows of ${ns}.${table}`));
+  if (!res.ok) return head + problem(res, ns, table);
+  const s = res.data;
+  const snaps = s.snapshots;
+  let inherited = 0;
+  const rows = snaps.map((sn, i) => {
+    const added = sn.addedRows ?? sn.addedRecords;
+    const prev = snaps[i - 1];
+    const expected = prev ? prev.firstRowId + (prev.addedRows ?? prev.addedRecords) : 0;
+    const ok = sn.firstRowId === expected;
+    if (ok) inherited++;
+    const last = added ? sn.firstRowId + added - 1 : null;
+    return `<tr><td class="num">${sn.sequenceNumber}</td><td>${esc(sn.operation)}</td><td class="num">${fmt(sn.firstRowId)}</td><td class="num">${fmt(added)}</td>` +
+      `<td class="num">${last == null ? "–" : `${fmt(sn.firstRowId)} to ${fmt(last)}`}</td>` +
+      `<td>${ok ? `<span class="status good" style="margin:0">${ICON_OK}<span>continues</span></span>` : `<span class="status bad" style="margin:0">${ICON_BAD}<span>expected ${fmt(expected)}</span></span>`}</td></tr>`;
+  }).join("");
+  const v3 = s.formatVersion === 3;
+  const allInherited = snaps.length > 0 && inherited === snaps.length;
+  return head + `
+    <div class="grid-2">
+      <section class="region">
+        <h2><code>${esc(s.table)}</code></h2>
+        <p class="sub">Created as format version ${esc(s.formatVersion)} before the connector started</p>
+        ${status(v3, `Format version ${esc(s.formatVersion)}${v3 ? "" : ": row lineage needs 3"}`)}
+        ${snaps.length ? status(allInherited, allInherited
+          ? `Every commit's first <code>_row_id</code> picks up where the last one ended (${snaps.length} of ${snaps.length})`
+          : `${snaps.length - inherited} commit${snaps.length - inherited === 1 ? "" : "s"} broke the row-ID sequence`)
+          : `<div class="empty"><strong>No commits yet.</strong>Events are still on their way through Kafka Connect.</div>`}
+        <div class="counters" style="grid-template-columns:repeat(2,1fr);margin-top:1.25rem">
+          <div class="counter"><div class="label">Rows</div><div class="value">${fmt(s.totalRecords ?? 0)}</div></div>
+          <div class="counter"><div class="label">Next <code>_row_id</code> to assign</div><div class="value">${fmt(s.nextRowId)}</div></div>
+        </div>
+      </section>
+      <section class="region">
+        <h2>Row IDs handed out per commit</h2>
+        <p class="sub">From each snapshot's <code>first-row-id</code> in <code>metadata.json</code></p>
+        ${snaps.length ? `<table><thead><tr><th class="num">Seq</th><th>Operation</th><th class="num">First <code>_row_id</code></th><th class="num">Rows added</th><th class="num">IDs assigned</th><th>Sequence</th></tr></thead><tbody>${rows}</tbody></table>` : ""}
+      </section>
+    </div>`;
+}
+
+async function renderMutation() {
+  const cfg = CONFIG.kept;
+  const res = await fetchIdentity(cfg);
+  const panel = identityPanel(res, cfg, "--kept", "chart-kept", "One customer, updated by MERGE");
+  return `<p class="point">An update through a deletion vector keeps the row's <code>_row_id</code>. Only <code>_last_updated_sequence_number</code> moves.</p>
+    ${stageLinks(tableLink(cfg.ns, cfg.table, `Browse ${cfg.ns}.${cfg.table} and its snapshot history`, "/snapshots"))}
+    <div class="grid-2">
+      <section class="region">${panel}</section>
+      <section class="region">
+        <h2>Row state after each commit</h2>
+        <p class="sub"><code>silver.customers</code> is merge-on-read, so each MERGE writes a deletion vector instead of rewriting the file</p>
+        ${res.ok ? identityTable(res.data) : ""}
+      </section>
+    </div>`;
+}
+
+async function renderSchema() {
+  const { ns, table } = CONFIG.bronze;
+  const res = await api(`/api/tables/${ns}/${table}/stats`);
+  const head = `<p class="point">Changing the schema only writes new metadata. No data files are rewritten and the ALTER itself creates no snapshot.</p>` +
+    stageLinks(tableLink(ns, table, `Browse ${ns}.${table} rows, including the new columns`));
+  if (!res.ok) return head + problem(res, ns, table);
+  const s = res.data;
+  const now = { snapshots: s.snapshotCount, files: s.totalDataFiles ?? 0, schemas: s.schemaCount, metadata: s.metadataVersions };
+  if (!state.baseline) state.baseline = { ...now, at: new Date() };
+  const b = state.baseline;
+  const counter = (label, key) => {
+    const d = now[key] - b[key];
+    return `<div class="counter"><div class="label">${label}</div><div class="value">${fmt(now[key])}</div>` +
+      `<div class="delta ${d ? "changed" : ""}">${d ? `${d > 0 ? "+" : ""}${d} since baseline` : "no change"}</div></div>`;
+  };
+  const firstSchema = {};
+  s.schemas.forEach((sc) => sc.columns.forEach((c) => { if (!(c in firstSchema)) firstSchema[c] = sc.schemaId; }));
+  const showDefault = (v) => (v == null ? `<span style="color:var(--muted)">none</span>` : `<code>${esc(typeof v === "string" ? `'${v}'` : JSON.stringify(v))}</code>`);
+  const cols = s.columns.map((c) => {
+    const added = firstSchema[c.name] > 0;
+    return `<tr class="${added ? "hl" : ""}"><td><code>${esc(c.name)}</code></td><td><code>${esc(c.type)}</code></td><td>${c.required ? "yes" : "no"}</td>` +
+      `<td>${showDefault(c.initialDefault)}</td><td>${showDefault(c.writeDefault)}</td><td>${added ? `<span class="tag">added in schema ${firstSchema[c.name]}</span>` : ""}</td></tr>`;
+  }).join("");
+  return head + `
+    <div class="counters">
+      ${counter("Snapshots", "snapshots")}
+      ${counter("Data files", "files")}
+      ${counter("Schema versions", "schemas")}
+      ${counter("Metadata files", "metadata")}
+    </div>
+    <div class="baseline-note">
+      <span>Changes counted from ${b.at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}. Each INSERT adds one snapshot and one data file; each ALTER adds neither.</span>
+      <button class="link-btn" id="rebase">Reset baseline</button>
+    </div>
+    <h2>Columns in <code>${esc(s.table)}</code></h2>
+    <p class="sub">Existing rows read the initial default. New rows get the write default when they don't set a value.</p>
+    <table><thead><tr><th>Column</th><th>Type</th><th>Required</th><th>Initial default</th><th>Write default</th><th></th></tr></thead><tbody>${cols}</tbody></table>`;
+}
+
+function joinEvent() {
+  const withSeq = state.events.filter((e) => e.sequenceNumber != null && e.table);
+  if (state.selectedEvent != null) {
+    const pinned = withSeq.find((e) => e.index === state.selectedEvent);
+    if (pinned) return pinned;
+  }
+  return withSeq[withSeq.length - 1] || null;
+}
+
+function highlightJson(pretty, seq) {
+  const json = esc(pretty);
+  return json.replace(new RegExp(`(&quot;sequenceNumber&quot;: )(${seq})\\b`), `$1<span class="hit">$2</span>`);
+}
+
+async function renderJoin() {
+  const head = `<p class="point">OpenLineage has no idea what a row is. Iceberg's <code>sequenceNumber</code> joins its commit events to the exact rows each commit touched.</p>`;
+  const ev = joinEvent();
+  if (!ev) return head + `<div class="empty"><strong>No lineage events yet.</strong>Run <code>demo/run-stage.sh 4</code>. Its MERGE sends an event here, and the rows it touched appear next to it.</div>`;
+  const parts = shortTable(ev.table).split(".");
+  const ns = parts[0], table = parts.slice(1).join(".");
+  const res = ns && table ? await api(`/api/tables/${ns}/${table}/rows?col=_last_updated_sequence_number&val=${ev.sequenceNumber}&id_col=${ns === "bronze" ? "event_id" : "customer_id"}`) : { ok: false, status: 400, error: "event has no table name" };
+  const following = state.selectedEvent == null;
+  const rowsHtml = res.ok
+    ? (res.data.rows.length
+        ? `<table><thead><tr>${res.data.columns.map((c) => `<th class="${c.startsWith("_") ? "num" : ""}"><code>${esc(c).replace("_updated_", "_updated_<wbr>")}</code></th>`).join("")}</tr></thead><tbody>` +
+          res.data.rows.map((r) => `<tr>${r.map((v, i) => `<td class="${i < 2 ? "num" : ""}">${esc(v)}</td>`).join("")}</tr>`).join("") + `</tbody></table>`
+        : `<div class="empty"><strong>No rows currently carry sequence ${esc(ev.sequenceNumber)}.</strong>A later commit updated them, or this commit only deleted rows.</div>`)
+    : problem(res, ns, table);
+  return head + `
+    <div class="follow">
+      ${following ? `<span>Showing the newest event. Pick any event on the right to join it instead.</span>` : `<span>Showing the event you picked.</span><button class="link-btn" id="follow">Follow newest</button>`}
+      ${ns && table ? tableLink(ns, table, "Open these rows in the table browser", `/rows/seq/${ev.sequenceNumber}`) : ""}
+    </div>
+    <div class="grid-3">
+      <section class="region">
+        <h2>Commit event</h2>
+        <p class="sub">What the lineage tool received from Iceberg's commit report</p>
+        <pre class="json">${highlightJson(ev.rawPretty, ev.sequenceNumber)}</pre>
+      </section>
+      <section class="region">
+        <h2>The join key</h2>
+        <p class="sub">Copied from the event into a row filter</p>
+        <div class="bridge"><span class="big">${esc(ev.sequenceNumber)}</span><span><code>sequenceNumber</code> = <code>_last_updated_sequence_number</code></span></div>
+        <pre class="sql">${res.ok ? esc(res.data.sql) : ""}</pre>
+      </section>
+      <section class="region">
+        <h2>Rows this commit touched</h2>
+        <p class="sub"><code>${esc(shortTable(ev.table))}</code>, read with DuckDB</p>
+        ${rowsHtml}
+      </section>
+    </div>`;
+}
+
+async function renderFailure() {
+  const [keptRes, churnRes] = await Promise.all([fetchIdentity(CONFIG.kept), fetchIdentity(CONFIG.churn)]);
+  const shared = Math.max(maxRowId(keptRes), maxRowId(churnRes));
+  const kept = identityPanel(keptRes, CONFIG.kept, "--kept", "chart-kept", "Position-delete MERGE (stage 2)", shared);
+  const churn = identityPanel(churnRes, CONFIG.churn, "--churn", "chart-churn", "Delete by key, then insert", shared);
+  return `<p class="point">An equality-delete upsert, the pattern most streaming CDC sinks use, gives the row a new <code>_row_id</code> on every update.</p>
+    ${stageLinks(tableLink(CONFIG.churn.ns, CONFIG.churn.table, `Browse ${CONFIG.churn.ns}.${CONFIG.churn.table} snapshot history`, "/snapshots"))}
+    <div class="grid-2">
+      <section class="region">${kept}</section>
+      <section class="region">${churn}</section>
+    </div>
+    <p class="sub" style="margin-top:1.5rem;max-width:70ch">Both tables are format version 3. What decides whether identity survives is how the engine deletes the old row, not the table format.</p>`;
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline view: Kafka topic -> Kafka Connect -> Iceberg table -> DuckDB,
+// then the same events before (raw Kafka JSON) and after (Iceberg row) commit.
+// ---------------------------------------------------------------------------
+const LEGEND = `<p class="legend"><code>_row_id</code> is the permanent ID Iceberg gives a row when it's first committed. ` +
+  `<code>_last_updated_sequence_number</code> is the commit that last changed the row. Each commit creates a snapshot, numbered by its sequence number.</p>`;
+
+async function renderPipeline() {
+  const res = await api("/api/pipeline?limit=6");
+  if (!res.ok) return `<div class="empty"><strong>Can't load the pipeline.</strong>${esc(res.error)}</div>`;
+  const d = res.data, k = d.kafka, c = d.connect, t = d.table;
+  const local = d.backend === "local";
+  const head = local
+    ? `<p class="point">Events flow from Kafka into an Iceberg table. The messages never carry a <code>_row_id</code>; Iceberg assigns one to each row when it commits.</p>`
+    : `<p class="point">On AWS, Spark writes rows to an Iceberg table on S3, registered in Glue. Iceberg assigns each row a <code>_row_id</code> when it commits.</p>`;
+  const step = (title, name, body, off) =>
+    `<div class="step ${off ? "off" : ""}"><div class="step-title">${title}</div><div class="step-name">${name}</div><div class="step-body">${body}</div></div>`;
+
+  let kafkaBody;
+  if (!local) kafkaBody = "Not used on AWS.";
+  else if (!k.available) kafkaBody = `Can't reach Kafka: ${esc(k.error || "unknown error")}`;
+  else if (!k.exists) kafkaBody = "The topic doesn't exist yet. <code>demo/run-stage.sh 1</code> creates it.";
+  else kafkaBody = `<span class="big">${fmt(k.messageCount)}</span>messages in ${k.partitions} partition${k.partitions === 1 ? "" : "s"}`;
+
+  let connectBody;
+  if (!local) connectBody = "Not used on AWS. Spark wrote these rows, run by the seed scripts in <code>scripts/aws/</code>.";
+  else if (!c.available) connectBody = `Can't reach Kafka Connect: ${esc(c.error || "unknown error")}`;
+  else if (!c.registered) connectBody = "The connector isn't registered yet. <code>demo/run-stage.sh 1</code> registers it.";
+  else connectBody = status(c.state === "RUNNING", esc(c.state)) +
+    `Reads <code>${esc(c.topics)}</code>, commits to <code>${esc(c.table)}</code> every ${c.commitIntervalMs ? c.commitIntervalMs / 1000 + " s" : "interval"}`;
+
+  let tableBody;
+  if (!t.exists) tableBody = `<code>${esc(t.name)}</code> doesn't exist yet. <code>demo/run-stage.sh 1</code> creates it.`;
+  else {
+    const writers = Object.entries(t.commitsByWriter).map(([w, n]) => `${n} by ${esc(w)}`).join(", ");
+    tableBody = `<span class="big">${fmt(t.totalRecords)}</span>rows, format version ${esc(t.formatVersion)}. ${fmt(t.snapshotCount)} commit${t.snapshotCount === 1 ? "" : "s"}${writers ? ` (${writers})` : ""}.`;
+  }
+
+  const flow = `<div class="flow">
+    ${step("Kafka topic", esc(local ? k.topic || "events" : "none"), kafkaBody, !local)}<div class="arrow" aria-hidden="true">&rarr;</div>
+    ${step("Kafka Connect", esc(local ? c.name || "iceberg-sink" : "none"), connectBody, !local)}<div class="arrow" aria-hidden="true">&rarr;</div>
+    ${step("Iceberg table", `<code>${esc(t.name)}</code>`, tableBody)}<div class="arrow" aria-hidden="true">&rarr;</div>
+    ${step("Query engine", "DuckDB", "Reads the table's metadata and Parquet files, including the row lineage columns.")}
+  </div>`;
+
+  let detail = "";
+  if (local && k.available && k.recent && k.recent.length) {
+    const matched = d.matched || {};
+    const rows = k.recent.map((m) => {
+      const id = m.parsed && m.parsed.event_id;
+      const hit = id && matched[id];
+      return `<tr><td class="num">${m.offset}</td><td class="raw">${esc(m.value)}</td>` +
+        (hit ? `<td class="num lin">${hit.rowId}</td><td class="num lin">${hit.lastUpdatedSequenceNumber}</td>`
+             : `<td class="pending" colspan="2">not committed yet</td>`) + `</tr>`;
+    }).join("");
+    detail = `<h2>Same event, before and after the commit</h2>
+      <p class="sub">The newest ${k.recent.length} messages on <code>${esc(k.topic)}</code>, matched to their rows in <code>${esc(t.name)}</code> by <code>event_id</code></p>
+      ${LEGEND}
+      <table><thead>
+        <tr><th class="group" colspan="2">In Kafka</th><th class="group lin" colspan="2">In Iceberg</th></tr>
+        <tr><th class="num">Offset</th><th>Raw message</th><th class="num lin"><code>_row_id</code></th><th class="num lin"><code>_last_updated_seq</code></th></tr>
+      </thead><tbody>${rows}</tbody></table>`;
+  } else if (t.exists && d.latestRows && d.latestRows.length) {
+    const rows = d.latestRows.map((r) => `<tr><td class="num lin">${r.rowId}</td><td class="num lin">${r.lastUpdatedSequenceNumber}</td><td><code>${esc(r.event_id)}</code></td><td class="num">${esc(r.customer_id)}</td><td class="num">${esc(r.amount)}</td></tr>`).join("");
+    detail = `<h2>Newest rows in <code>${esc(t.name)}</code></h2><p class="sub">Read with DuckDB</p>${LEGEND}
+      <table><thead><tr><th class="num lin"><code>_row_id</code></th><th class="num lin"><code>_last_updated_seq</code></th><th>event_id</th><th class="num">customer_id</th><th class="num">amount</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+  return head + flow + detail;
+}
+
+// ---------------------------------------------------------------------------
+// Table browser: any table in the catalog -- rows, snapshot history, schema.
+// ---------------------------------------------------------------------------
+const PAGE = 25;
+
+async function renderTables() {
+  const cat = await api("/api/catalog");
+  if (!cat.ok) return `<div class="empty"><strong>Can't list the catalog's tables.</strong>${esc(cat.error)}</div>`;
+  const list = cat.data.tables;
+  const tb = state.tbl;
+  if (!list.length) return `<div class="empty"><strong>The catalog has no tables yet.</strong>Run <code>demo/run-stage.sh 1</code> to create the first one.</div>`;
+  if (!tb.ns || !list.some((x) => x.namespace === tb.ns && x.table === tb.table)) {
+    const pick = list.find((x) => x.namespace === "bronze" && x.table === "events") || list[0];
+    tb.ns = pick.namespace; tb.table = pick.table;
+  }
+  const groups = {};
+  list.forEach((x) => (groups[x.catalogNamespace] = groups[x.catalogNamespace] || []).push(x));
+  const nav = Object.entries(groups).map(([g, items]) => `<h3>${esc(g)}</h3>` + items.map((x) =>
+    `<button data-pick="${esc(x.namespace)}|${esc(x.table)}" aria-current="${x.namespace === tb.ns && x.table === tb.table}">${esc(x.table)}</button>`).join("")).join("");
+
+  const statsRes = await api(`/api/tables/${tb.ns}/${tb.table}/stats`);
+  let main;
+  if (!statsRes.ok) main = problem(statsRes, tb.ns, tb.table);
+  else {
+    const s = statsRes.data;
+    const tabs = [["rows", "Rows"], ["snapshots", `Snapshots (${s.snapshotCount})`], ["schema", `Schema (${s.columns.length} columns)`]];
+    const subtabs = `<div class="subtabs" role="tablist">${tabs.map(([id, label]) => `<button role="tab" data-subtab="${id}" aria-selected="${tb.tab === id}">${label}</button>`).join("")}</div>`;
+    let body = "";
+    if (tb.tab === "rows") body = await tableRows(s);
+    else if (tb.tab === "snapshots") body = tableSnapshots(s);
+    else body = tableSchema(s);
+    main = `<h2 style="font-size:1.4rem"><code>${esc(s.table)}</code></h2>
+      <p class="facts">Format version ${esc(s.formatVersion)}, ${fmt(s.totalRecords ?? 0)} rows, ${fmt(s.snapshotCount)} snapshots, ${fmt(s.totalDataFiles ?? 0)} data files, ${fmt(s.schemaCount)} schema version${s.schemaCount === 1 ? "" : "s"}</p>
+      ${LEGEND}${subtabs}${body}`;
+  }
+  return `<div class="browser"><nav class="tbl-list" aria-label="Tables">${nav}</nav><section style="min-width:0">${main}</section></div>`;
+}
+
+async function tableRows(s) {
+  const tb = state.tbl;
+  const q = `limit=${PAGE}&offset=${tb.offset}` + (tb.seq != null ? `&seq=${tb.seq}` : "");
+  const res = await api(`/api/tables/${tb.ns}/${tb.table}/data?${q}`);
+  if (!res.ok) return problem(res, tb.ns, tb.table);
+  const d = res.data;
+  const chip = tb.seq != null ? `<div class="chip">Rows last changed by snapshot seq ${tb.seq}<button data-clear-seq title="Show all rows">&times;</button></div>` : "";
+  if (!d.rows.length) return chip + `<div class="empty"><strong>${tb.seq != null ? `No rows currently carry sequence ${tb.seq}.` : "The table is empty."}</strong>${tb.seq != null ? "A later commit changed them, or that commit only deleted rows." : ""}</div>`;
+  const head = d.columns.map((c, i) => `<th class="${i < 2 ? "num lin" : ""}"><code>${esc(c === "_last_updated_sequence_number" ? "_last_updated_seq" : c)}</code></th>`).join("");
+  const rows = d.rows.map((r) => `<tr>${r.map((v, i) => v == null
+    ? `<td class="null ${i < 2 ? "lin" : ""}">null</td>`
+    : `<td class="${i < 2 ? "num lin" : ""}" title="${esc(v)}">${esc(v)}</td>`).join("")}</tr>`).join("");
+  const first = d.offset + 1, last = d.offset + d.rows.length;
+  return chip + `<div class="scroll-x"><table class="data-table"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="pager"><button class="link-btn" data-page="-1" ${d.offset === 0 ? "disabled" : ""}>Previous</button>
+    <span>Rows ${fmt(first)} to ${fmt(last)} of ${fmt(d.total)}, ordered by <code>_row_id</code></span>
+    <button class="link-btn" data-page="1" ${last >= d.total ? "disabled" : ""}>Next</button></div>`;
+}
+
+function tableSnapshots(s) {
+  if (!s.snapshots.length) return `<div class="empty"><strong>No commits yet.</strong></div>`;
+  const rows = s.snapshots.map((sn) => `<tr>
+    <td class="num">${sn.sequenceNumber}</td><td>${esc(timeOf(new Date(sn.timestampMs).toISOString()))}</td>
+    <td>${esc(sn.operation)}</td><td>${esc(sn.writer)}</td>
+    <td class="num">${fmt(sn.addedRecords ?? 0)}</td><td class="num">${fmt(sn.deletedRecords ?? 0)}</td>
+    <td class="num">${fmt(sn.firstRowId)}</td>
+    <td><button class="link-btn" data-seq="${sn.sequenceNumber}">Rows it last changed</button></td></tr>`).join("");
+  return `<p class="sub">Every commit, oldest first. <code>first-row-id</code> is the first <code>_row_id</code> handed out by that commit.</p>
+    <table><thead><tr><th class="num">Seq</th><th>Committed</th><th>Operation</th><th>Written by</th><th class="num">Rows added</th><th class="num">Rows deleted</th><th class="num">first-row-id</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function tableSchema(s) {
+  const firstSchema = {};
+  s.schemas.forEach((sc) => sc.columns.forEach((c) => { if (!(c in firstSchema)) firstSchema[c] = sc.schemaId; }));
+  const def = (v) => (v == null ? `<span style="color:var(--muted)">none</span>` : `<code>${esc(typeof v === "string" ? `'${v}'` : JSON.stringify(v))}</code>`);
+  const rows = s.columns.map((c) => `<tr><td><code>${esc(c.name)}</code></td><td><code>${esc(c.type)}</code></td><td>${c.required ? "yes" : "no"}</td><td>${def(c.initialDefault)}</td><td>${def(c.writeDefault)}</td>
+    <td>${firstSchema[c.name] > 0 ? `<span class="tag">added in schema ${firstSchema[c.name]}</span>` : ""}</td></tr>`).join("");
+  return `<p class="sub">Plus two columns every format version 3 table has without declaring them: <code>_row_id</code> and <code>_last_updated_sequence_number</code>.</p>
+    <table><thead><tr><th>Column</th><th>Type</th><th>Required</th><th>Initial default</th><th>Write default</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function bindTables() {
+  const tb = state.tbl;
+  document.querySelectorAll("[data-pick]").forEach((b) => b.addEventListener("click", () => {
+    const [ns, table] = b.dataset.pick.split("|");
+    go(`#tables/${ns}/${table}`);
+  }));
+  document.querySelectorAll("[data-subtab]").forEach((b) => b.addEventListener("click", () => go(`#tables/${tb.ns}/${tb.table}/${b.dataset.subtab}`)));
+  document.querySelectorAll("[data-seq]").forEach((b) => b.addEventListener("click", () => go(`#tables/${tb.ns}/${tb.table}/rows/seq/${b.dataset.seq}`)));
+  document.querySelectorAll("[data-clear-seq]").forEach((b) => b.addEventListener("click", () => go(`#tables/${tb.ns}/${tb.table}/rows`)));
+  document.querySelectorAll("[data-page]").forEach((b) => b.addEventListener("click", () => {
+    tb.offset = Math.max(0, tb.offset + Number(b.dataset.page) * PAGE);
+    renderStage();
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Commit feed
+// ---------------------------------------------------------------------------
+function renderFeed() {
+  const ol = $("#feed");
+  if (!state.events.length) {
+    ol.innerHTML = `<li class="none">No events yet. Spark commits from stage 2 on appear here. Kafka Connect's stage 1 commits don't send lineage events.</li>`;
+    return;
+  }
+  const selected = state.view === "stage" && state.stage === 4 ? (joinEvent() || {}).index : null;
+  ol.innerHTML = state.events.slice().reverse().map((e) => `
+    <li class="${state.freshIndexes.has(e.index) ? "fresh" : ""} ${e.index === selected ? "selected" : ""}">
+      <button data-event="${e.index}" title="Join this commit to its rows (stage 4)">
+        <span class="tbl">${esc(shortTable(e.table)).replace(/([._])/g, "$1<wbr>")}</span>
+        <span class="seq">seq ${esc(e.sequenceNumber)}</span>
+        <span class="meta">${esc(e.operation)}, ${esc(timeOf(e.eventTime))}</span>
+      </button>
+    </li>`).join("");
+  state.freshIndexes.clear();
+  ol.querySelectorAll("button[data-event]").forEach((b) => b.addEventListener("click", () => {
+    state.selectedEvent = Number(b.dataset.event);
+    go("#stage-4");
+  }));
+}
+
+async function pollEvents() {
+  const res = await api(`/api/events?since=${state.nextEvent}`);
+  if (!res.ok) return false;
+  if (res.data.next < state.nextEvent) {           // events file was reset
+    state.events = []; state.selectedEvent = null;
+    return pollEvents();
+  }
+  if (res.data.events.length) {
+    if (state.seenFirstPoll) res.data.events.forEach((e) => state.freshIndexes.add(e.index));
+    state.events.push(...res.data.events);
+  }
+  state.nextEvent = res.data.next;
+  state.seenFirstPoll = true;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Shell: tabs, backend badge, theme, polling
+// ---------------------------------------------------------------------------
+function renderTabs() {
+  const view = (id, label) => `<button role="tab" aria-selected="${state.view === id}" data-go="#${id}">${label}</button>`;
+  $("nav.stages").innerHTML = view("pipeline", "Pipeline") + view("tables", "Tables") + `<span class="sep" aria-hidden="true"></span>` +
+    STAGES.map((s) => `<button role="tab" aria-selected="${state.view === "stage" && s.n === state.stage}" data-go="#stage-${s.n}"><span class="n">${s.n}</span>${s.name}</button>`).join("");
+  document.querySelectorAll("nav.stages button").forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
+}
+
+let renderToken = 0;
+let lastHtml = "";
+async function renderStage() {
+  const token = ++renderToken;
+  const html = state.view === "pipeline" ? await renderPipeline()
+    : state.view === "tables" ? await renderTables()
+    : await STAGES.find((s) => s.n === state.stage).render();
+  if (token !== renderToken) return;   // a newer render started meanwhile
+  // Polling re-renders every few seconds; leave the DOM alone when nothing
+  // changed so hover tooltips and text selection survive.
+  if (html === lastHtml) return;
+  lastHtml = html;
+  $("#tooltip").style.display = "none";
+  const main = $("#stage");
+  const scroll = main.scrollTop;
+  main.innerHTML = html;
+  main.scrollTop = scroll;
+  bindTooltips();
+  bindTables();
+  const rebase = $("#rebase");
+  if (rebase) rebase.addEventListener("click", () => { state.baseline = null; renderStage(); });
+  const follow = $("#follow");
+  if (follow) follow.addEventListener("click", () => { state.selectedEvent = null; renderStage(); renderFeed(); });
+}
+
+// Hash routes: #pipeline, #tables[/ns/table[/rows|snapshots|schema[/seq/N]]], #stage-N
+function route() {
+  const h = location.hash.replace(/^#/, "");
+  const prev = { view: state.view, stage: state.stage };
+  let m;
+  if ((m = h.match(/^stage-([1-5])$/))) {
+    state.view = "stage"; state.stage = Number(m[1]);
+    if (state.stage === 3 && (prev.view !== "stage" || prev.stage !== 3)) state.baseline = null;  // fresh baseline each visit
+  } else if ((m = h.match(/^tables(?:\/([^/]+)\/([^/]+)(?:\/(rows|snapshots|schema))?(?:\/seq\/(\d+))?)?$/))) {
+    const tb = state.tbl;
+    const sameTable = tb.ns === m[1] && tb.table === m[2];
+    state.view = "tables";
+    if (m[1]) { tb.ns = m[1]; tb.table = m[2]; }
+    tb.tab = m[3] || "rows";
+    const seq = m[4] != null ? Number(m[4]) : null;
+    if (!sameTable || seq !== tb.seq) tb.offset = 0;
+    tb.seq = seq;
+  } else {
+    state.view = "pipeline";
+  }
+  lastHtml = "";
+  renderTabs();
+  renderFeed();
+  renderStage();
+}
+function go(hash) {
+  if (location.hash === hash) route(); else location.hash = hash;
+}
+window.addEventListener("hashchange", route);
+
+async function loadBackend() {
+  const res = await api("/api/backend");
+  const el = $("#backend"), label = $("#backend-label");
+  if (!res.ok) { el.className = "backend down"; label.textContent = "Dashboard server unreachable"; return; }
+  const b = res.data;
+  el.className = "backend up";
+  label.textContent = b.backend === "aws"
+    ? `AWS: S3 and Glue (${b.region}), Iceberg ${b.iceberg_version}`
+    : `Local: MinIO and REST catalog, Iceberg ${b.iceberg_version}`;
+}
+
+function applyTheme(t) {
+  if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  try { t ? localStorage.setItem("theme", t) : localStorage.removeItem("theme"); } catch (e) {}
+}
+function toggleTheme() {
+  const current = document.documentElement.dataset.theme ||
+    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  applyTheme(current === "dark" ? "light" : "dark");
+}
+
+async function tick() {
+  const before = state.events.length;
+  await pollEvents();
+  if (state.events.length !== before || !state.feedDrawn) { renderFeed(); state.feedDrawn = true; }
+  await renderStage();
+  setTimeout(tick, CONFIG.pollMs);
+}
+
+try { const t = localStorage.getItem("theme"); if (t) applyTheme(t); } catch (e) {}
+$("#theme").addEventListener("click", toggleTheme);
+document.addEventListener("keydown", (e) => {
+  if (e.target.closest("input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key >= "1" && e.key <= "5") go(`#stage-${e.key}`);
+  if (e.key === "p") go("#pipeline");
+  if (e.key === "b") go("#tables");
+  if (e.key === "t") toggleTheme();
+});
+route();
+loadBackend();
+setInterval(loadBackend, 15000);
+tick();
+</script>
+</body>
+</html>

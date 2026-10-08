@@ -1,0 +1,27 @@
+# Merged onto preflight/docker-compose.yml via the root docker-compose.yml's
+# `include:` (preflight/ itself stays untouched).
+#
+# Without this, RESTCatalogServer's JdbcCatalog defaults to
+# uri=jdbc:sqlite::memory:, and every NEW pooled JDBC connection opens its
+# own, separate, EMPTY in-memory database. The stages never noticed because
+# they call the catalog one request at a time, but any concurrent burst
+# (the dashboard polling several panels, Kafka Connect committing while
+# Spark runs) makes the pool open a second connection, which then answers
+# "no such table: iceberg_tables" (HTTP 500) -- and once the original
+# connection is gone, EVERY request fails and the catalog has effectively
+# forgotten all tables. Reproduced with 24 parallel GETs against
+# /v1/namespaces/silver/tables/customers on 2026-10-05.
+#
+# A file-backed SQLite DB is shared by all connections (and also survives a
+# container restart). The named volume is removed by `demo/run-stage.sh
+# reset` (`down -v`) together with minio-data, so a reset still wipes
+# catalog and warehouse together.
+services:
+  iceberg-rest:
+    environment:
+      CATALOG_URI: jdbc:sqlite:file:/var/lib/iceberg-rest/catalog.db
+    volumes:
+      - catalog-data:/var/lib/iceberg-rest
+
+volumes:
+  catalog-data:

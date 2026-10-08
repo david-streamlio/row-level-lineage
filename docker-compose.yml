@@ -1,0 +1,374 @@
+name: row-level-lineage-demo
+
+# Reuses the entire working pre-flight harness (MinIO, Iceberg REST catalog,
+# Kafka, Kafka Connect Iceberg sink, throwaway Spark, DuckDB) UNMODIFIED via
+# `include:`. Do not edit preflight/docker-compose.yml -- add new services
+# here instead. Compose resolves ${VARS} inside the included file against
+# THIS top-level .env (see .env's header comment).
+include:
+  - path:
+      - ./preflight/docker-compose.yml
+      # persists the REST catalog's JDBC store; see the file's header comment
+      - ./compose.catalog-persistence.yml
+      # Kafka Connect emits lineage events too; see the file's header comment
+      - ./compose.connect-lineage.yml
+
+services:
+  # ---------------------------------------------------------------------
+  # spark-demo: extends preflight's throwaway Spark image with a custom
+  # org.apache.iceberg.metrics.MetricsReporter that emits an
+  # OpenLineage-shaped RunEvent (snapshotId, sequenceNumber, operation) to
+  # openlineage-collector on every commit. Used for all demo-stage DDL/DML
+  # (silver.customers, schema evolution, MERGE) so every commit is
+  # observable via Composable Lineage, not just Stage 04's.
+  # ---------------------------------------------------------------------
+  spark-demo:
+    build:
+      context: ./docker/spark-demo
+      args:
+        ICEBERG_VERSION: ${ICEBERG_VERSION}
+        # Spark 4.0/Scala 2.13, NOT the shared SPARK_VERSION/SPARK_SCALA_VERSION
+        # (those pin preflight's throwaway Spark 3.5.4). This image needs
+        # Spark 4.0 for real VARIANT support in Stage 03.
+        SPARK_MAJOR_MINOR: "4.0"
+        SPARK_SCALA_VERSION: "2.13"
+        MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+        MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+        MINIO_ENDPOINT: http://minio:9000
+        # the demo's catalog (Lakekeeper by default), baked into the
+        # "lake" catalog's spark-defaults.conf -- see CATALOG_* in .env
+        ICEBERG_REST_URI: ${CATALOG_URI}
+        ICEBERG_WAREHOUSE: ${CATALOG_WAREHOUSE}
+        CATALOG_CREDENTIAL: ${CATALOG_CREDENTIAL:-}
+        CATALOG_SCOPE: ${CATALOG_SCOPE:-}
+        AWS_REGION: ${AWS_REGION}
+        OPENLINEAGE_URL: ${OPENLINEAGE_URL}
+        OPENLINEAGE_NAMESPACE: ${OPENLINEAGE_NAMESPACE}
+    image: lineage-spark-demo:local
+    profiles: ["tools"]
+    networks: [lineage-net]
+    environment:
+      OPENLINEAGE_URL: ${OPENLINEAGE_URL}
+      OPENLINEAGE_NAMESPACE: ${OPENLINEAGE_NAMESPACE}
+      OPENLINEAGE_DATASET_NAMESPACE: ${OPENLINEAGE_DATASET_NAMESPACE}
+    volumes:
+      - ./sql:/work/sql:ro
+      - ./demo:/work/demo:ro
+      - ./scripts:/work/scripts:ro
+      - ./out:/work/out
+    entrypoint: ["/usr/local/bin/demo-spark-sql"]   # spark-sql minus start-up noise (Dockerfile)
+
+  # ---------------------------------------------------------------------
+  # duckdb-demo: preflight's DuckDB verification image plus pre-installed
+  # extensions (docker/duckdb-demo/Dockerfile), wired to
+  # THIS repo's ./scripts and ./out so demo-stage read scripts (row lineage
+  # after mutation, schema-evolution proof, failure-mode contrast) don't
+  # require touching preflight/scripts.
+  # ---------------------------------------------------------------------
+  duckdb-demo:
+    build:
+      # preflight's image + DuckDB extensions baked in (works offline)
+      context: ./docker/duckdb-demo
+    image: lineage-duckdb-demo:local
+    profiles: ["tools"]
+    networks: [lineage-net]
+    environment:
+      LINEAGE_BACKEND: ${LINEAGE_BACKEND:-local}
+      CATALOG_URI: ${CATALOG_URI}
+      CATALOG_WAREHOUSE: ${CATALOG_WAREHOUSE}
+      CATALOG_CREDENTIAL: ${CATALOG_CREDENTIAL:-}
+      CATALOG_SCOPE: ${CATALOG_SCOPE:-}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      AWS_REGION: ${AWS_REGION}
+    volumes:
+      - ./scripts:/work/scripts:ro
+      - ./out:/work/out
+
+  # ---------------------------------------------------------------------
+  # openlineage-collector: minimal stdlib-only HTTP sink. Receives the
+  # OpenLineage-shaped events emitted by spark-demo's MetricsReporter,
+  # prints a one-line readable summary to stdout (for the live demo), and
+  # appends the full JSON to out/openlineage/events.jsonl (for Stage 04's
+  # sequenceNumber lookup), and forwards each event to Marquez for the
+  # lineage graph UI.
+  # ---------------------------------------------------------------------
+  openlineage-collector:
+    build:
+      context: ./docker/openlineage-collector
+    image: lineage-openlineage-collector:local
+    container_name: lineage-openlineage-collector
+    networks: [lineage-net]
+    depends_on:
+      # started, not healthy: the collector forwards in the background and
+      # keeps working (terminal + JSONL) if Marquez is slow or down
+      marquez-api:
+        condition: service_started
+      marquez-web:
+        condition: service_started
+    environment:
+      MARQUEZ_URL: http://marquez-api:5000/api/v1/lineage
+    ports:
+      - "${OPENLINEAGE_COLLECTOR_PORT_HOST}:5000"
+    volumes:
+      - ./out/openlineage:/var/log/openlineage
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  # ---------------------------------------------------------------------
+  # lineage-dashboard: read-only JSON API + single page for showing the
+  # demo to an audience. Reads through scripts/lineage_backend.py (the same
+  # adapter the stage scripts use), so it works against either backend
+  # via LINEAGE_BACKEND. Start it with `docker compose up -d lineage-dashboard`.
+  # ---------------------------------------------------------------------
+  lineage-dashboard:
+    build:
+      context: ./dashboard
+    image: lineage-dashboard:local
+    container_name: lineage-dashboard
+    networks: [lineage-net]
+    ports:
+      - "${DASHBOARD_PORT_HOST}:8088"
+    environment:
+      LINEAGE_BACKEND: ${LINEAGE_BACKEND:-local}
+      ICEBERG_VERSION: ${ICEBERG_VERSION}
+      CATALOG_URI: ${CATALOG_URI}
+      CATALOG_WAREHOUSE: ${CATALOG_WAREHOUSE}
+      CATALOG_CREDENTIAL: ${CATALOG_CREDENTIAL:-}
+      CATALOG_SCOPE: ${CATALOG_SCOPE:-}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      AWS_REGION: ${AWS_REGION}
+      # Pipeline view (local backend only)
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TOPIC}
+      KAFKA_CONNECT_URL: http://kafka-connect:8083
+      # AWS backend only. Credentials pass through from the shell that runs
+      # `docker compose up` (see .env); empty in local mode.
+      LINEAGE_AWS_REGION: ${LINEAGE_AWS_REGION:-}
+      LINEAGE_NAMESPACE_PREFIX: ${LINEAGE_NAMESPACE_PREFIX:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    volumes:
+      - ./dashboard:/app/dashboard:ro
+      - ./scripts:/app/scripts:ro
+      - ./out/openlineage:/data/openlineage:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8088/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  # ---------------------------------------------------------------------
+  # Marquez: the OpenLineage reference server + web UI, for showing the
+  # lineage graph (kafka topic -> kafka-connect -> bronze.events, Spark
+  # jobs -> silver.customers). Fed by openlineage-collector. Only the web
+  # UI is published; it proxies /api/v1 to marquez-api itself.
+  # Images are amd64-only (they run under emulation on Apple silicon).
+  # Search (OpenSearch) is off to keep the footprint small.
+  # ---------------------------------------------------------------------
+  marquez-db:
+    image: postgres:14
+    container_name: lineage-marquez-db
+    networks: [lineage-net]
+    environment:
+      POSTGRES_USER: marquez
+      POSTGRES_PASSWORD: marquez
+      POSTGRES_DB: marquez
+    volumes:
+      - marquez-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "marquez"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  marquez-api:
+    image: marquezproject/marquez:${MARQUEZ_VERSION}
+    platform: linux/amd64
+    container_name: lineage-marquez-api
+    networks: [lineage-net]
+    depends_on:
+      marquez-db:
+        condition: service_healthy
+    environment:
+      MARQUEZ_PORT: 5000
+      MARQUEZ_ADMIN_PORT: 5001
+      POSTGRES_HOST: marquez-db
+      POSTGRES_PORT: 5432
+      SEARCH_ENABLED: "false"
+
+  marquez-web:
+    image: marquezproject/marquez-web:${MARQUEZ_VERSION}
+    platform: linux/amd64
+    container_name: lineage-marquez-web
+    networks: [lineage-net]
+    depends_on:
+      marquez-api:
+        condition: service_started
+    environment:
+      MARQUEZ_HOST: marquez-api
+      MARQUEZ_PORT: 5000
+      WEB_PORT: 3000
+    ports:
+      - "${MARQUEZ_WEB_PORT_HOST}:3000"
+
+
+  # ---------------------------------------------------------------------
+  # Lakekeeper: the demo's Iceberg REST catalog (CATALOG_* in .env), with a
+  # web UI (namespaces, tables, schema history, snapshots) at
+  # http://localhost:${LAKEKEEPER_PORT_HOST}/ui. Chosen over preflight's
+  # reference catalog after scripts/lakekeeper/v3_roundtrip.sh showed
+  # identical V3 metadata and row lineage on both.
+  # Warehouse "demo" lives under s3://warehouse/lakekeeper/ in MinIO.
+  # Authentication/authorization are off (allow-all) for the demo.
+  # ---------------------------------------------------------------------
+  lakekeeper-db:
+    image: postgres:17
+    container_name: lineage-lakekeeper-db
+    networks: [lineage-net]
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - lakekeeper-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+
+  lakekeeper-migrate:
+    image: quay.io/lakekeeper/catalog:${LAKEKEEPER_VERSION}
+    container_name: lineage-lakekeeper-migrate
+    networks: [lineage-net]
+    environment: &lakekeeper-env
+      LAKEKEEPER__PG_ENCRYPTION_KEY: demo-only-not-a-secret
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://postgres:postgres@lakekeeper-db:5432/postgres
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://postgres:postgres@lakekeeper-db:5432/postgres
+      RUST_LOG: info
+    command: ["migrate"]
+    depends_on:
+      lakekeeper-db:
+        condition: service_healthy
+
+  lakekeeper:
+    image: quay.io/lakekeeper/catalog:${LAKEKEEPER_VERSION}
+    container_name: lineage-lakekeeper
+    networks: [lineage-net]
+    environment: *lakekeeper-env
+    command: ["serve"]
+    ports:
+      - "${LAKEKEEPER_PORT_HOST}:8181"
+    healthcheck:
+      test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
+      interval: 2s
+      timeout: 10s
+      retries: 20
+      start_period: 3s
+    depends_on:
+      lakekeeper-migrate:
+        condition: service_completed_successfully
+
+  lakekeeper-bootstrap:
+    image: curlimages/curl:8.11.1
+    container_name: lineage-lakekeeper-bootstrap
+    networks: [lineage-net]
+    environment:
+      LAKEKEEPER_WAREHOUSE: ${LAKEKEEPER_WAREHOUSE}
+      AWS_REGION: ${AWS_REGION}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./docker/lakekeeper/bootstrap.sh:/bootstrap.sh:ro
+    entrypoint: ["sh", "/bootstrap.sh"]
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+      # the warehouse is created (and validated) in the bucket mc-init makes
+      mc-init:
+        condition: service_completed_successfully
+
+
+  # ---------------------------------------------------------------------
+  # Apache Polaris: ASF Iceberg REST catalog, the alternative to Lakekeeper
+  # (switch with the CATALOG_* block in .env). In-memory persistence (`reset`
+  # and restarts start it empty; the bootstrap service recreates the "demo"
+  # catalog). Clients authenticate with OAuth client credentials
+  # (CATALOG_CREDENTIAL). Passed the V3 round trip (scripts/lakekeeper/
+  # v3_roundtrip.sh --candidate polaris). Started only via CATALOG_SERVICES.
+  # ---------------------------------------------------------------------
+  polaris:
+    image: apache/polaris:${POLARIS_VERSION}
+    container_name: lineage-polaris
+    networks: [lineage-net]
+    environment:
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      POLARIS_BOOTSTRAP_CREDENTIALS: POLARIS,${POLARIS_CLIENT_ID},${POLARIS_CLIENT_SECRET}
+      polaris.realm-context.realms: POLARIS
+      quarkus.otel.sdk.disabled: "true"
+      # the console runs in the browser and calls Polaris directly
+      quarkus.http.cors.enabled: "true"
+      quarkus.http.cors.origins: http://localhost:${POLARIS_CONSOLE_PORT_HOST}
+    ports:
+      - "${POLARIS_PORT_HOST}:8181"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8182/q/health"]
+      interval: 2s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+  polaris-bootstrap:
+    image: curlimages/curl:8.11.1
+    container_name: lineage-polaris-bootstrap
+    networks: [lineage-net]
+    environment:
+      POLARIS_CLIENT_ID: ${POLARIS_CLIENT_ID}
+      POLARIS_CLIENT_SECRET: ${POLARIS_CLIENT_SECRET}
+      POLARIS_CATALOG: ${POLARIS_CATALOG}
+      AWS_REGION: ${AWS_REGION}
+    volumes:
+      - ./docker/polaris/bootstrap.sh:/bootstrap.sh:ro
+    entrypoint: ["sh", "/bootstrap.sh"]
+    depends_on:
+      polaris:
+        condition: service_healthy
+      mc-init:
+        condition: service_completed_successfully
+
+  # Apache Polaris console (apache/polaris-tools, built from a pinned commit;
+  # no published image). Tables, schema, format-version, and RBAC screens.
+  # Its login token lives in memory only; the recorder logs in once per
+  # browser launch (demo/record-windows/cdp.mjs).
+  polaris-console:
+    build:
+      context: https://github.com/apache/polaris-tools.git#9e6870075dce0cfe4da73f87d61a034545bbea19:console
+      dockerfile: docker/Dockerfile
+    image: lineage-polaris-console:local
+    container_name: lineage-polaris-console
+    networks: [lineage-net]
+    environment:
+      VITE_POLARIS_API_URL: http://localhost:${POLARIS_PORT_HOST}
+      VITE_OAUTH_TOKEN_URL: http://localhost:${POLARIS_PORT_HOST}/api/catalog/v1/oauth/tokens
+      VITE_POLARIS_REALM: POLARIS
+      VITE_POLARIS_PRINCIPAL_SCOPE: PRINCIPAL_ROLE:ALL
+      VITE_POLARIS_REALM_HEADER_NAME: Polaris-Realm
+    ports:
+      - "${POLARIS_CONSOLE_PORT_HOST}:8080"
+    depends_on:
+      polaris:
+        condition: service_healthy
+
+volumes:
+  marquez-data:
+  lakekeeper-data:

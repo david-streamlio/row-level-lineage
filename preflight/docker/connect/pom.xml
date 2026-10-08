@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Throwaway POM used only to resolve the Iceberg Kafka Connect sink's
+  runtime classpath into a plugin directory.
+
+  Apache Iceberg does NOT publish a shaded "iceberg-kafka-connect-runtime"
+  jar to Maven Central for the donated connector (that only existed for the
+  pre-donation Tabular project, distributed via GitHub releases). As of
+  1.11.0, `iceberg-kafka-connect` is a plain (unshaded) jar, so the plugin's
+  full dependency tree has to be resolved and copied into the Kafka Connect
+  plugin.path directory by hand. This is exactly the kind of packaging gap
+  this harness exists to surface.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>local.harness</groupId>
+  <artifactId>iceberg-connect-plugin-deps</artifactId>
+  <version>1.0</version>
+  <packaging>pom</packaging>
+
+  <dependencies>
+    <!-- Pin Jackson explicitly (matching Iceberg's own jackson-bom) so it
+         wins Maven's dependency mediation over whatever older version
+         parquet-hadoop -> hadoop-common pulls in transitively.
+
+         NOTE: since ~2.20, jackson-annotations releases on its own
+         major.minor-only cadence (e.g. "2.21", no third digit) while
+         jackson-core/jackson-databind keep the full major.minor.patch
+         scheme (e.g. "2.21.3"), hence the separate property. -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-annotations</artifactId>
+      <version>${jackson.annotations.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-kafka-connect</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <!-- Parquet writer support: TBLPROPERTIES write.format.default=parquet -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-parquet</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <!-- iceberg-orc: NOT used for writing (we force parquet-only), but
+         required anyway. Iceberg 1.11's org.apache.iceberg.formats.
+         FormatModelRegistry static-initializes support for every known file
+         format (parquet, orc, avro) unconditionally on class load, so
+         missing org.apache.iceberg.orc.OrcRowWriter throws
+         NoClassDefFoundError out of that static initializer the moment the
+         sink task tries to open its first (parquet) writer; confirmed by
+         the exact stack trace, which never touches ORC-specific config. -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-orc</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <!-- S3FileIO for MinIO access. iceberg-aws holds the actual
+         org.apache.iceberg.aws.s3.S3FileIO class but declares its AWS SDK
+         v2 dependency as Gradle compileOnly (never published to its POM),
+         so Maven alone won't pull in an AWS SDK; iceberg-aws-bundle
+         supplies a self-contained, shaded AWS SDK v2 for exactly that
+         reason. Both are required together, confirmed by the identical
+         ClassNotFoundException: org.apache.iceberg.aws.s3.S3FileIO
+         surfacing from docker/iceberg-rest's REST catalog server, which
+         uses this exact same dependency pair. -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-aws</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-aws-bundle</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+
+    <!-- org.apache.iceberg.connect.channel.CommitterImpl imports
+         org.apache.hadoop.conf.Configuration directly (same pattern as
+         RESTCatalogServer in docker/iceberg-rest/pom.xml); confirmed via
+         NoClassDefFoundError: org/apache/hadoop/conf/Configuration thrown
+         from CommitterImpl.save() the moment the sink task tries to commit,
+         well after table writes succeed. -->
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-common</artifactId>
+      <version>${hadoop.version}</version>
+    </dependency>
+
+    <!-- Supplied by the Kafka Connect worker's own classpath already;
+         must NOT be duplicated inside the plugin directory. -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>connect-api</artifactId>
+      <version>${kafka.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>connect-json</artifactId>
+      <version>${kafka.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>connect-transforms</artifactId>
+      <version>${kafka.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-clients</artifactId>
+      <version>${kafka.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>2.0.13</version>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
+</project>

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tiny, single-class jar: a custom org.apache.iceberg.metrics.MetricsReporter
+  that turns every Iceberg commit into an OpenLineage-shaped event.
+
+  Deliberately NOT the full openlineage-spark package. That listener attaches
+  at the Spark job level and has no visibility into Iceberg's own
+  snapshotId/sequenceNumber/operation fields; those live only on Iceberg's
+  CommitReport. Implementing MetricsReporter directly against Iceberg's own
+  documented extension point is the reliable, deterministic path to exactly
+  the three fields Stage 04 needs to correlate the lineage graph back to
+  row-level identity.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.demo.lineage</groupId>
+  <artifactId>openlineage-metrics-reporter</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <maven.compiler.source>17</maven.compiler.source>
+    <maven.compiler.target>17</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- Must match iceberg-spark-runtime's own version; that runtime jar
+         ships org.apache.iceberg.metrics.* unrelocated, so this compiles
+         against "provided" and resolves against the runtime jar at
+         execution time inside Spark. -->
+    <iceberg.version>1.11.0</iceberg.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-api</artifactId>
+      <version>${iceberg.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <!-- CommitReport (and its Immutable*/​*Parser support classes) live in
+         iceberg-core, not iceberg-api. Confirmed via jar inspection: only
+         iceberg-core-1.11.0.jar contains org/apache/iceberg/metrics/CommitReport.class. -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-core</artifactId>
+      <version>${iceberg.version}</version>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
+</project>

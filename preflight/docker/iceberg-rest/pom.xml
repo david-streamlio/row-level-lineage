@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Throwaway POM used only to resolve a runtime classpath for
+  org.apache.iceberg.rest.RESTCatalogServer, Apache Iceberg's own
+  in-tree REST catalog reference server (backed by JdbcCatalog).
+
+  WHY WE BUILD THIS OURSELVES INSTEAD OF USING tabulario/iceberg-rest:
+  tabulario/iceberg-rest is the exact same RESTCatalogServer class, just
+  packaged by a third party. Its last published tag (1.6.0, August 2024)
+  bundles an Iceberg core library from before format-version 3 existed as a
+  concept (V3 wasn't finalized until Iceberg 1.11.0, May 2026), so it
+  rejects `CREATE TABLE ... TBLPROPERTIES('format-version'='3', ...)`
+  server-side with "Unsupported format version: v3 (supported: v2)",
+  regardless of which Iceberg client library version talks to it. Since
+  Apache Iceberg does not publish a versioned RESTCatalogServer *image* of
+  its own, we resolve the same class (now living in the iceberg-open-api
+  module's test-fixtures jar, moved there from iceberg-core in more recent
+  releases) against the CURRENT Iceberg version instead, giving us a
+  REST catalog that actually understands V3.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>local.harness</groupId>
+  <artifactId>iceberg-rest-server-deps</artifactId>
+  <version>1.0</version>
+  <packaging>pom</packaging>
+
+  <dependencies>
+    <!-- Pin Jackson explicitly (matching Iceberg's own jackson-bom) so it
+         wins Maven's dependency mediation over the older version
+         hadoop-common pulls in transitively. See docker/connect/pom.xml
+         for the same fix applied to the Kafka Connect plugin image;
+         jackson-annotations releases on a major.minor-only cadence since
+         ~2.20 while jackson-core/jackson-databind keep a full
+         major.minor.patch scheme, hence the separate property. -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-annotations</artifactId>
+      <version>${jackson.annotations.version}</version>
+    </dependency>
+
+    <!-- org.apache.iceberg.rest.RESTCatalogServer itself (moved here from
+         iceberg-core in newer releases). -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-open-api</artifactId>
+      <version>${iceberg.version}</version>
+      <classifier>test-fixtures</classifier>
+    </dependency>
+    <!-- RESTCatalogAdapter / RESTCatalogServlet / Route / HttpMethod, which
+         RESTCatalogServer (same package, no import needed) depends on. -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-core</artifactId>
+      <version>${iceberg.version}</version>
+      <classifier>tests</classifier>
+      <type>test-jar</type>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-api</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-core</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-bundled-guava</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <!-- S3FileIO for MinIO access. iceberg-aws holds the actual
+         org.apache.iceberg.aws.s3.S3FileIO class but declares its AWS SDK
+         v2 dependency as Gradle `compileOnly` (never published to its POM),
+         so Maven alone won't pull in an AWS SDK; iceberg-aws-bundle supplies
+         a self-contained, shaded AWS SDK v2 for exactly that reason. Both
+         are required together; iceberg-aws-bundle alone (as originally
+         tried here) has no org.apache.iceberg.aws.* classes at all and
+         fails with ClassNotFoundException: org.apache.iceberg.aws.s3.S3FileIO. -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-aws</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-aws-bundle</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+
+    <!-- Backing catalog implementation: JdbcCatalog (sqlite). -->
+    <dependency>
+      <groupId>org.xerial</groupId>
+      <artifactId>sqlite-jdbc</artifactId>
+      <version>${sqlite.version}</version>
+    </dependency>
+
+    <!-- RESTCatalogServer.initializeBackendCatalog() takes a Hadoop
+         Configuration; CatalogUtil.buildIcebergCatalog requires the class
+         on the classpath even though JdbcCatalog + S3FileIO never touch
+         HDFS. Any old Jetty/Jackson hadoop-common drags in transitively
+         loses Maven's "nearest wins" mediation to the versions pinned
+         directly above/below (matches the same pattern used for the Kafka
+         Connect plugin image). -->
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-common</artifactId>
+      <version>${hadoop.version}</version>
+    </dependency>
+
+    <!-- Jetty 12 / EE10 servlet container that RESTCatalogServer embeds.
+
+         jetty-util is pinned explicitly (not just pulled in transitively
+         via jetty-server) because hadoop-common also depends on an ancient
+         jetty-util (9.4.x, same groupId:artifactId, different version).
+         Both land at the same dependency-tree depth once hadoop-common is
+         declared above, and Maven's "nearest wins" mediation falls back to
+         first-declared-wins on ties, which silently kept the Jetty 9 jar
+         and broke RESTCatalogServer at startup with
+         NoClassDefFoundError: org/eclipse/jetty/util/Attributes$Layer
+         (a Jetty 12-only API). Declaring it directly here forces it to
+         depth 1, so it always wins regardless of declaration order. -->
+    <dependency>
+      <groupId>org.eclipse.jetty</groupId>
+      <artifactId>jetty-util</artifactId>
+      <version>${jetty.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.jetty</groupId>
+      <artifactId>jetty-server</artifactId>
+      <version>${jetty.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.jetty.ee10</groupId>
+      <artifactId>jetty-ee10-servlet</artifactId>
+      <version>${jetty.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.jetty.compression</groupId>
+      <artifactId>jetty-compression-server</artifactId>
+      <version>${jetty.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.jetty.compression</groupId>
+      <artifactId>jetty-compression-gzip</artifactId>
+      <version>${jetty.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+  </dependencies>
+</project>

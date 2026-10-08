@@ -1,0 +1,198 @@
+name: row-level-lineage
+
+networks:
+  lineage-net:
+    driver: bridge
+
+volumes:
+  minio-data:
+
+services:
+  # ---------------------------------------------------------------------
+  # MinIO: S3-compatible object store backing the Iceberg warehouse.
+  # ---------------------------------------------------------------------
+  minio:
+    image: ${MINIO_IMAGE}
+    container_name: lineage-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks: [lineage-net]
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  # One-shot: create the `warehouse` bucket. Downstream services wait on
+  # this to complete successfully rather than just "started".
+  mc-init:
+    image: ${MC_IMAGE}
+    container_name: lineage-mc-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks: [lineage-net]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
+        mc mb --ignore-existing local/${MINIO_BUCKET} &&
+        mc anonymous set none local/${MINIO_BUCKET} &&
+        echo "MinIO bucket '${MINIO_BUCKET}' ready"
+
+  # ---------------------------------------------------------------------
+  # Iceberg REST catalog, backed by MinIO.
+  #
+  # Built locally from docker/iceberg-rest rather than pulled as
+  # tabulario/iceberg-rest: that image's last published tag (1.6.0, August
+  # 2024) bundles an Iceberg core library from before format-version 3
+  # existed as a concept, and rejects V3 CREATE TABLE requests server-side
+  # with "Unsupported format version: v3 (supported: v2)" regardless of
+  # client library version. docker/iceberg-rest runs the identical
+  # org.apache.iceberg.rest.RESTCatalogServer class (same JdbcCatalog
+  # backend, same CATALOG_* env var scheme) built against the CURRENT
+  # Iceberg version instead. See docker/iceberg-rest/pom.xml for details.
+  # ---------------------------------------------------------------------
+  iceberg-rest:
+    build:
+      context: ./docker/iceberg-rest
+      args:
+        ICEBERG_VERSION: ${ICEBERG_VERSION}
+    image: lineage-iceberg-rest:local
+    container_name: lineage-iceberg-rest
+    depends_on:
+      mc-init:
+        condition: service_completed_successfully
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_REGION: ${AWS_REGION}
+      CATALOG_WAREHOUSE: ${ICEBERG_WAREHOUSE}
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      CATALOG_S3_ACCESS__KEY__ID: ${MINIO_ROOT_USER}
+      CATALOG_S3_SECRET__ACCESS__KEY: ${MINIO_ROOT_PASSWORD}
+      CATALOG_CLIENT_REGION: ${AWS_REGION}
+    ports:
+      - "8181:8181"
+    networks: [lineage-net]
+    # NOTE: this image has no curl/wget, so we cannot define a reliable
+    # in-container healthcheck. Readiness is polled from the host
+    # (scripts/setup.sh) against GET /v1/config before anything downstream
+    # depends on it being *functionally* ready.
+
+  # ---------------------------------------------------------------------
+  # Kafka broker, KRaft mode, single combined broker+controller node.
+  # ---------------------------------------------------------------------
+  kafka:
+    image: ${KAFKA_IMAGE}
+    container_name: lineage-kafka
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+    ports:
+      - "29092:29092"
+    networks: [lineage-net]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+
+  # ---------------------------------------------------------------------
+  # Kafka Connect running the Apache Iceberg Sink Connector.
+  # ---------------------------------------------------------------------
+  kafka-connect:
+    build:
+      context: ./docker/connect
+      args:
+        KAFKA_VERSION: ${KAFKA_TARBALL_VERSION}
+        KAFKA_SCALA_VERSION: ${KAFKA_TARBALL_SCALA}
+        ICEBERG_VERSION: ${ICEBERG_VERSION}
+        ICEBERG_MIN_VERSION: ${ICEBERG_MIN_VERSION}
+        HADOOP_VERSION: ${HADOOP_VERSION}
+    image: lineage-kafka-connect:local
+    container_name: lineage-kafka-connect
+    depends_on:
+      kafka:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_started
+    ports:
+      - "8083:8083"
+    networks: [lineage-net]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/connectors"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  # ---------------------------------------------------------------------
+  # Spark: throwaway container used ONLY for (a) explicit V3 table DDL and
+  # (b) the Check-C fallback query if DuckDB can't read .snapshots.
+  # It is never used to read _row_id (Spark's Iceberg source has no
+  # SupportsReadingMetadata for row lineage columns).
+  # ---------------------------------------------------------------------
+  spark:
+    build:
+      context: ./docker/spark
+      args:
+        ICEBERG_VERSION: ${ICEBERG_VERSION}
+        SPARK_MAJOR_MINOR: "3.5"
+        SPARK_SCALA_VERSION: ${SPARK_SCALA_VERSION}
+        MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+        MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+        MINIO_ENDPOINT: http://minio:9000
+        ICEBERG_REST_URI: ${ICEBERG_REST_URI}
+        ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE}
+        AWS_REGION: ${AWS_REGION}
+    image: lineage-spark:local
+    profiles: ["tools"]
+    networks: [lineage-net]
+    volumes:
+      - ./sql:/work/sql:ro
+      - ./out:/work/out
+    entrypoint: ["/opt/spark/bin/spark-sql"]
+
+  # ---------------------------------------------------------------------
+  # DuckDB: the actual read/verification engine (has SupportsReadingMetadata
+  # for _row_id / _last_updated_sequence_number; Flink does not).
+  # ---------------------------------------------------------------------
+  duckdb:
+    build:
+      context: ./docker/duckdb
+    image: lineage-duckdb:local
+    profiles: ["tools"]
+    networks: [lineage-net]
+    environment:
+      ICEBERG_NAMESPACE: ${ICEBERG_NAMESPACE}
+      ICEBERG_TABLE: ${ICEBERG_TABLE}
+      ICEBERG_REST_URI: ${ICEBERG_REST_URI}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      AWS_REGION: ${AWS_REGION}
+    volumes:
+      - ./scripts:/work/scripts:ro
+      - ./out:/work/out

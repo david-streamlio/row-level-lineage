@@ -1,0 +1,43 @@
+# Merged onto preflight/docker-compose.yml via the root docker-compose.yml's
+# `include:` (preflight/ itself stays untouched).
+#
+# Gives Kafka Connect's Iceberg sink the same OpenLineage MetricsReporter
+# spark-demo uses, so ingest commits show up in the lineage graph too
+# (kafka topic -> kafka-connect job -> bronze.events). Without this only
+# Spark commits emit lineage events.
+#
+# The jar is built from docker/spark-demo/reporter (its Dockerfile) by a
+# one-shot service and dropped into a subdirectory of the Iceberg sink's
+# plugin directory, so it
+# loads in the same plugin classloader as Iceberg itself. Stage 01 turns it
+# on with the connector property iceberg.catalog.metrics-reporter-impl.
+#
+# Relative paths here resolve against preflight/ (the first file in the
+# include), hence ../docker/...
+services:
+  lineage-reporter-jar:
+    build:
+      context: ../docker/spark-demo/reporter
+      args:
+        ICEBERG_VERSION: ${ICEBERG_VERSION}
+    image: lineage-reporter-jar:local
+    container_name: lineage-reporter-jar
+    command: ["cp", "/openlineage-metrics-reporter.jar", "/dest/"]
+    volumes:
+      - lineage-reporter:/dest
+
+  kafka-connect:
+    depends_on:
+      lineage-reporter-jar:
+        condition: service_completed_successfully
+    environment:
+      OPENLINEAGE_URL: ${OPENLINEAGE_URL}
+      OPENLINEAGE_NAMESPACE: kafka-connect
+      OPENLINEAGE_JOB_NAME: iceberg-sink
+      OPENLINEAGE_INPUTS: kafka://kafka:9092|${KAFKA_TOPIC}
+      OPENLINEAGE_DATASET_NAMESPACE: ${OPENLINEAGE_DATASET_NAMESPACE}
+    volumes:
+      - lineage-reporter:/opt/kafka/plugins/iceberg-kafka-connect/lineage-reporter:ro
+
+volumes:
+  lineage-reporter:
