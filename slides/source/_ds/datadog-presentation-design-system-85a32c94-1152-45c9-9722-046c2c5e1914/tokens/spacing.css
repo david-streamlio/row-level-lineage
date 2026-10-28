@@ -1,0 +1,17 @@
+/* Slide geometry, in px on the 1280x720 canvas (EMU/9525). */
+:root{
+--dd-slide-w:1280px;--dd-slide-h:720px;
+--dd-margin-x:73px;      /* 695323 EMU left/right safe margin */
+--dd-title-top:37.6px;   /* 357808 EMU */
+--dd-title-h:91px;       /* 868339 EMU */
+--dd-body-top:147px;     /* 1399032 EMU */
+--dd-content-top:151px;  /* 1440894 EMU — top of card rows */
+--dd-content-w:1133px;   /* 10795002 EMU */
+--dd-gutter:20px;        /* gap between cards in a 4-up row */
+--dd-panel-third:437px;  /* 4161003 EMU — Content 1/3 colour panel */
+--dd-footer-y:683px;     /* 6508466 EMU — page number / logo baseline row */
+/* generic spacing ramp */
+--dd-space-1:4px;--dd-space-2:8px;--dd-space-3:12px;--dd-space-4:16px;--dd-space-5:20px;--dd-space-6:24px;--dd-space-8:32px;--dd-space-10:40px;--dd-space-12:48px;--dd-space-16:64px;
+/* card insets from the template text bodies */
+--dd-card-pad-x:19.2px;--dd-card-pad-top:28.8px;--dd-card-pad-bottom:24px;
+}

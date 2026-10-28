@@ -1,0 +1,5 @@
+/* Roboto + Roboto Mono are the only Datadog presentation typefaces.
+   The .pptx embeds them as Google-obfuscated .fntdata (not decodable), so we load
+   the identical families from Google Fonts. No substitution — same typefaces. */
+@import url("https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400;1,700&family=Roboto+Mono:wght@400;700&display=swap");
+:root{--dd-font-sans:"Roboto",system-ui,sans-serif;--dd-font-mono:"Roboto Mono",ui-monospace,monospace;--dd-font-display:"Roboto",system-ui,sans-serif}

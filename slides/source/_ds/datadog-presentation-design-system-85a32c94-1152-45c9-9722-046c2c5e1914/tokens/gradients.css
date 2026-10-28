@@ -1,0 +1,13 @@
+/* Every template gradient is a 45° DrawingML linear (ang 2700000) = CSS 135deg,
+   with stops held flat 0-30% and 90-100% so the mix happens across the middle. */
+:root{
+--dd-grad-angle:135deg; /* @kind other */
+--dd-grad-purple:linear-gradient(135deg,#5C00EF 0%,#5C00EF 30%,#9C43FE 90%,#9C43FE 100%); /* @kind other */
+--dd-grad-blue:linear-gradient(135deg,#0060FF 0%,#0060FF 30%,#00CAFF 90%,#00CAFF 100%); /* @kind other */
+--dd-grad-pink:linear-gradient(135deg,#FF0080 0%,#FF0080 30%,#FF7AB3 90%,#FF7AB3 100%); /* @kind other */
+--dd-grad-green:linear-gradient(135deg,#00B765 0%,#00B765 30%,#57E8B3 90%,#57E8B3 100%); /* @kind other */
+--dd-grad-cyan:linear-gradient(135deg,#00CAFF 0%,#00CAFF 30%,#60D3F5 90%,#60D3F5 100%); /* @kind other */
+--dd-grad-orange:linear-gradient(135deg,#FF5E00 0%,#FF5E00 30%,#FF9B00 90%,#FF9B00 100%); /* @kind other */
+/* Hairline rules above/below big stats */
+--dd-grad-rule:linear-gradient(135deg,#5C00EF 0%,#9C43FE 100%); /* @kind other */
+}
