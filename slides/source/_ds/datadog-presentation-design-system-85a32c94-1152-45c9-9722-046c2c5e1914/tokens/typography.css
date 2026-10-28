@@ -1,0 +1,14 @@
+/* Sizes are the template's point sizes. 1pt = 1.3333px on a 1280x720 slide
+   (13.333in wide slide -> 96dpi). Slide tokens below are the px equivalents. */
+:root{
+/* point scale (authoring reference) */
+--dd-pt-cover-title:72pt; /* @kind other */--dd-pt-divider:66pt; /* @kind other */--dd-pt-subdivider:54pt; /* @kind other */--dd-pt-stat:72pt; /* @kind other */--dd-pt-agenda:48pt; /* @kind other */
+--dd-pt-slide-title:36pt; /* @kind other */--dd-pt-subtitle:24pt; /* @kind other */--dd-pt-body-lg:24pt; /* @kind other */--dd-pt-heading:20pt; /* @kind other */--dd-pt-body:18pt; /* @kind other */--dd-pt-body-sm:16pt; /* @kind other */--dd-pt-label:14pt; /* @kind other */--dd-pt-caption:12pt; /* @kind other */--dd-pt-page-num:10pt; /* @kind other */
+/* px scale on the 1280x720 slide canvas */
+--dd-size-cover-title:96px;--dd-size-divider:88px;--dd-size-subdivider:72px;--dd-size-stat:96px;--dd-size-agenda:64px;
+--dd-size-slide-title:48px;--dd-size-subtitle:32px;--dd-size-body-lg:32px;--dd-size-heading:26.67px;--dd-size-body:24px;--dd-size-body-sm:21.33px;--dd-size-label:18.67px;--dd-size-caption:16px;--dd-size-page-num:13.33px;
+/* weights, spacing, leading */
+--dd-weight-regular:400; /* @kind other */--dd-weight-medium:500; /* @kind other */--dd-weight-bold:700; /* @kind other */
+--dd-leading-tight:1; /* @kind other */--dd-leading-snug:1.14; /* @kind other */--dd-leading-body:1.4; /* @kind other */
+--dd-tracking-tight:-0.01em; /* @kind other */--dd-tracking-normal:0; /* @kind other */--dd-tracking-caps:0.04em; /* @kind other */
+}

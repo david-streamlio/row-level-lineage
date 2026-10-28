@@ -1,0 +1,17 @@
+:root{
+/* The one shadow in the whole template: outerShdw blur 101600 EMU, dist 50800, dir 90°, black @10% */
+--dd-shadow-card:0 5.33px 10.67px rgba(0,0,0,0.10);
+--dd-shadow-screenshot:0 0 10.67px rgba(0,0,0,0.10);
+/* radii — roundRect adj 3354 and round2SameRect adj2 3112 on a 267px card */
+--dd-radius-card:9px;--dd-radius-card-top:8.3px;--dd-radius-pill:999px;--dd-radius-none:0px;
+--dd-accent-bar-h:9.6px;   /* 91500 EMU top bar on every content card */
+--dd-hex-border:6.67px;    /* 63500 EMU hexagon outline */
+--dd-hairline:1.33px;      /* 12700 EMU */
+--dd-rule-h:2.87px;        /* 27300 EMU stat rule */
+/* hexagon used for icon holders and Main Idea shapes */
+--dd-hex-clip:polygon(25% 0%,75% 0%,100% 50%,75% 100%,25% 100%,0% 50%); /* @kind other */
+/* card with only the top two corners rounded (round2SameRect) */
+--dd-radius-top-only:8.3px 8.3px 0 0; /* @kind radius */
+/* motion: the template is static; on-screen recreations use a single quiet easing */
+--dd-ease:cubic-bezier(.4,0,.2,1); /* @kind other */--dd-dur-fast:120ms; /* @kind other */--dd-dur:200ms; /* @kind other */
+}

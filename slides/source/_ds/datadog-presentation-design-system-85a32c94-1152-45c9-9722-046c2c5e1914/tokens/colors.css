@@ -1,0 +1,30 @@
+:root{
+/* Brand purples — 632CA6 is the corporate/logo purple; 5C00EF→9C43FE is the 2026 gradient pair */
+--dd-purple:#632CA6;--dd-purple-deep:#5C00EF;--dd-purple-bright:#9C43FE;--dd-purple-vivid:#8000FF;--dd-purple-alt:#7700FF;--dd-purple-tint:#CC99FE;
+--dd-magenta-purple:#9C1ECD;--dd-magenta:#C128A7;
+/* Accents (each has a light companion used for hex outlines / gradient ends) */
+--dd-pink:#FF0080;--dd-pink-light:#FF7AB3;
+--dd-green:#00B765;--dd-green-light:#57E8B3;
+--dd-blue:#0060FF;--dd-blue-mid:#3C95FF;
+--dd-cyan:#00CAFF;--dd-cyan-light:#60D3F5;
+--dd-orange:#FF5E00;--dd-amber:#FF9B00;
+/* Neutrals */
+--dd-black:#000000;--dd-white:#FFFFFF;
+--dd-gray-900:#323436;--dd-gray-500:#787878;--dd-gray-400:#969EA5;--dd-gray-300:#C7C7C7;--dd-gray-200:#D8D8D8;--dd-gray-150:#DDDDDD;--dd-gray-100:#F2F2F2;
+/* Semantic aliases */
+--dd-text-primary:var(--dd-black);
+--dd-text-secondary:var(--dd-gray-500);
+--dd-text-muted:var(--dd-gray-400);
+--dd-text-on-dark:var(--dd-white);
+--dd-surface-page:var(--dd-white);
+--dd-surface-card:var(--dd-white);
+--dd-surface-row-alt:var(--dd-gray-100);
+--dd-border-hairline:var(--dd-gray-200);
+--dd-border-hex:var(--dd-purple-tint);
+--dd-accent-primary:var(--dd-purple-deep);
+--dd-link:var(--dd-purple-deep);
+--dd-link-hover:var(--dd-purple-bright);
+/* Data-viz series order as used in every chart in the template */
+--dd-series-1:var(--dd-pink);--dd-series-2:var(--dd-blue);--dd-series-3:var(--dd-purple-vivid);--dd-series-4:var(--dd-orange);
+--dd-series-track:var(--dd-gray-200);
+}
