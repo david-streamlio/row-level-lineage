@@ -9,4 +9,4 @@ Given at Iceberg Day - Community Over Code, Glasgow, on Oct 10, 2026.
   - `assets/` holds the backgrounds, logos, demo clips and stills the deck uses; `uploads/` holds the original clip uploads.
 - PDF: open the standalone HTML and print to PDF (one page per slide).
 
-The deck is published at https://streaming-expert.com/talks/slides/iceberg-v3-lineage-coc-2026/ as a copy synced from this folder.
+The deck is published at https://streaming-expert.com/talks/slides/iceberg-v3-lineage-coc-2026/ as a framework port in the `david-decks` repo (`decks/iceberg-v3-lineage-coc-2026`), built from `source/`. Change the source here first, then the port.
